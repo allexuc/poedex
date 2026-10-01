@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+cache/
+build/
+site/
+shots/
+battle/build/
+battle/shots/
+battle/ps-data.json
+battle/sample-teams.json
+battle/engine/config.js
+battle/engine/data-table.js
