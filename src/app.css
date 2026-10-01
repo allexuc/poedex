@@ -380,3 +380,24 @@ footer pre { white-space: pre-wrap; font-size: 11px; line-height: 1.6; backgroun
 .tiers b { font-family: var(--font-num); font-size: 18px; margin-left: 5px; }
 @keyframes pd-flash { 30% { background: color-mix(in srgb, var(--warn) 20%, transparent); } }
 @media (prefers-reduced-motion: no-preference) { .flash { animation: pd-flash 0.7s ease-out; } }
+
+/* ブックマーク・チームに追加 */
+.bmk { color: #B7791F; margin-right: 4px; font-weight: 700; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .bmk { color: #F2C14E; } }
+.pacts { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.pbtn { min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); font-weight: 700; font-size: 14px; cursor: pointer; }
+.pbtn[aria-pressed="true"], .pbtn[aria-expanded="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.tadd { margin: 10px 0 6px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+.tadd .fine { margin: 0 0 10px; }
+.tadd .flab { display: block; margin: 14px 0 6px; font-size: 12.5px; font-weight: 700; color: var(--ink-2); }
+.tlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tlist button { width: 100%; text-align: left; min-height: 48px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); cursor: pointer; }
+.tlist button:disabled { opacity: 0.5; cursor: default; }
+.tlist .tn { display: block; font-weight: 700; }
+.tlist .tm { display: block; font-size: 12.5px; color: var(--ink-2); }
+.tnew { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tnew button { min-height: 52px; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper); cursor: pointer; line-height: 1.3; }
+.tnew .g { display: block; font-size: 11.5px; color: var(--ink-2); }
+.tnew .r { display: block; font-weight: 700; font-size: 14px; }
+.tnew button:disabled { opacity: 0.45; cursor: default; }
+#tadd-msg a { font-weight: 700; }

@@ -1,12 +1,12 @@
 """バトル画面を実ブラウザで操作して確かめる（人が操作する流れ・CPU 同士の自動対戦）。"""
-import collections, json, os, statistics, subprocess, sys, tempfile, time
+import collections, json, os, re, statistics, subprocess, sys, tempfile, time, unicodedata
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "etl"))
 from verify import new_context          # 図鑑の検証と同じ、本番フォントを使う設定
 from playwright.sync_api import sync_playwright
 
 B = Path(__file__).resolve().parent
-URL = (B / "build" / "battle.html").as_uri()
+URL = (B.parent / "build" / "app.html").as_uri()   # 図鑑とバトルを1つにまとめたページ
 SHOTS = B / "shots"
 results = []
 
@@ -18,13 +18,19 @@ def check(name, got, want):
 
 
 def open_page(ctx, q=""):
+    """q は「?autotest=1」や「#/teams」など。ハッシュがなければ対戦の画面（#/b）を開く。"""
     pg = ctx.new_page()
     errs = []
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" and "ERR_FAILED" not in m.text else None)
-    pg.goto(URL + q)
-    pg.wait_for_selector("html[data-ready='1']", timeout=30000)
+    pg.goto(URL + q + ("" if "#" in q else "#/b"))
+    pg.wait_for_selector("html[data-bt-ready='1'][data-pd-ready='1']", timeout=30000)
     return pg, errs
+
+
+def sel_team(pg, side="you", key="ch_singles"):
+    """対戦の画面で選んでいるチームの ID（保存されている内容から読む）"""
+    return pg.evaluate("([k, s]) => JSON.parse(localStorage.getItem('pd.bt.v2')).sel[k][s]", [key, side])
 
 
 def play_until_end(pg, max_actions=120, shot_at=None):
@@ -115,7 +121,8 @@ def main():
         print("■ チームの編集")
         ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
         pg, errs = open_page(ctx)
-        pg.goto(URL + "#/team/you"); pg.wait_for_selector(".slot")
+        you = sel_team(pg)
+        pg.goto(URL + f"#/team/{you}"); pg.wait_for_selector(".slot")
         check("チーム画面に6匹", pg.locator("a.slot:not(.empty)").count(), 6)
         pg.screenshot(path=str(SHOTS / "team.png"))
         pg.locator("a.slot").first.tap(); pg.wait_for_selector("#s-nat")
@@ -133,18 +140,21 @@ def main():
         name = rows.first.locator(".nm").inner_text()
         rows.first.tap(); pg.wait_for_selector("#s-nat")
         check("選んだ技が1番目に入る", name in pg.locator(".mvgrid a").first.inner_text(), True)
-        pg.goto(URL + "#/team/opp"); pg.wait_for_selector("#paste")
+        pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+        pg.tap("[data-newteam='empty']"); pg.wait_for_selector("#paste")
+        empty = pg.evaluate("location.hash.split('/')[2]")
         paste = ("Pikachu @ Light Ball\nAbility: Static\nEVs: 32 SpA / 32 Spe / 2 HP\nTimid Nature\n- Thunderbolt\n- Volt Switch\n- Fly\n- Protect\n\n"
                  "Mewtwo @ Leftovers\nAbility: Pressure\n- Psychic\n")
         pg.fill("#paste", paste)
-        pg.tap("[data-import='opp']")
+        pg.tap(f"[data-import='{empty}']")
         notes = pg.inner_text("#import-notes")
         check("読み込み：使えないポケモン・覚えない技は外して知らせる", ["1匹を読み込みました" in notes, "外しました" in notes], [True, True])
-        pg.goto(URL + "#/")
+        pg.goto(URL + "#/b")
         pg.wait_for_selector("#start")
+        pg.select_option("[data-pickteam='opp']", empty)
         check("相手が1匹だと開始できず理由を表示", [pg.is_enabled("#start"), "3匹以上" in pg.inner_text("#problems")], [False, True])
-        pg.tap("[data-sample='opp']")
-        check("サンプルに戻すと開始できる", pg.is_enabled("#start"), True)
+        pg.select_option("[data-pickteam='opp']", "auto")
+        check("相手を「おまかせ」に戻すと開始できる", pg.is_enabled("#start"), True)
         check("  errors", errs, [])
         ctx.close()
 
@@ -175,23 +185,25 @@ def main():
         print("■ コピー・貼り付け")
         ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
         ctx.grant_permissions(["clipboard-read", "clipboard-write"])
-        pg, errs = open_page(ctx, "#/team/you")
-        pg.wait_for_selector("[data-copyteam]")
-        pg.tap("[data-copyteam='you']"); pg.wait_for_timeout(300)
+        pg, errs = open_page(ctx)
+        you = sel_team(pg)
+        pg.goto(URL + f"#/team/{you}"); pg.wait_for_selector("[data-copyteam]")
+        pg.tap("[data-copyteam]"); pg.wait_for_timeout(300)
         clip = pg.evaluate("navigator.clipboard.readText()")
         check("今の編成をコピー（Showdown の形式）", [clip.startswith("Garchomp @"), clip.count("\n- ") >= 20], [True, True])
         pg.evaluate("t => navigator.clipboard.writeText(t)", "Pikachu @ Light Ball\nAbility: Static\nTimid Nature\n- Thunderbolt\n- Protect\n\nGengar @ Focus Sash\nAbility: Cursed Body\n- Shadow Ball\n- Protect\n")
-        pg.goto(URL + "#/team/opp"); pg.wait_for_selector("[data-paste]")
-        pg.tap("[data-paste='opp']"); pg.wait_for_timeout(400)
+        pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+        pg.tap("[data-newteam='empty']"); pg.wait_for_selector("[data-paste]")
+        pg.tap("[data-paste]"); pg.wait_for_timeout(400)
         check("貼り付けて読み込む", ["2匹を読み込みました" in pg.inner_text("#import-notes"), pg.locator("a.slot:not(.empty)").count()], [True, 2])
         pg.screenshot(path=str(SHOTS / "team_clip.png"), full_page=True)
         ctx.close()
         ctx = new_context(b, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
-        pg, errs2 = open_page(ctx, "#/team/you")
-        pg.wait_for_selector("[data-copyteam]")
-        pg.tap("[data-copyteam='you']"); pg.wait_for_timeout(300)
+        pg, errs2 = open_page(ctx)
+        pg.goto(URL + f"#/team/{sel_team(pg)}"); pg.wait_for_selector("[data-copyteam]")
+        pg.tap("[data-copyteam]"); pg.wait_for_timeout(300)
         check("クリップボードの権限がなくてもコピーできる", "コピーしました" in pg.inner_text("#import-notes"), True)
-        pg.tap("[data-paste='you']"); pg.wait_for_timeout(1500)
+        pg.tap("[data-paste]"); pg.wait_for_timeout(1500)
         check("読み取れないときは手で貼る方法を案内", "長押しして貼り付け" in pg.inner_text("#import-notes"), True)
         check("  errors", errs + errs2, [])
         ctx.close()
@@ -199,24 +211,126 @@ def main():
         print("■ おまかせ編成（画面の操作）")
         ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
         pg, errs = open_page(ctx)
-        before = pg.inner_text(".team:nth-of-type(2) .mons") if pg.locator(".team").count() > 1 else ""
         opp_names = lambda: [x.inner_text() for x in pg.locator("#teams .card.team").nth(1).locator(".mon .nm").all()]
+        check("相手は最初「おまかせ」", pg.locator("[data-pickteam='opp']").input_value(), "auto")
         n0 = opp_names()
-        pg.tap("[data-auto='opp']")
+        pg.tap("[data-reroll]")
         n1 = opp_names()
-        check("おまかせで相手のチームが作り直される", [len(n1), n1 != n0], [6, True])
+        check("「別のおまかせにする」で相手のチームが変わる", [len(n1), n1 != n0], [6, True])
         info = pg.locator("#teams .card.team").nth(1).locator(".fine").inner_text()
         check("弱点の補完の割合とメガシンカの数を表示", ["弱点を受けられる仲間がいる割合" in info, "メガシンカ" in info], [True, True])
         pg.screenshot(path=str(SHOTS / "auto_setup.png"), full_page=True)
-        pg.goto(URL + "#/team/opp"); pg.wait_for_selector(".slot")
-        check("チーム画面に型（役割）が出る", pg.locator(".slot .meta b").count(), 6)
-        pg.screenshot(path=str(SHOTS / "auto_team.png"), full_page=True)
-        pg.goto(URL + "#/"); pg.wait_for_selector("#auto-opp")
-        pg.check("#auto-opp")
         n2 = opp_names()
         pg.tap("#start"); pg.wait_for_selector("#b-cmd .pvb")
-        pg.tap("[data-act='quit']"); pg.tap("[data-act='quit']"); pg.wait_for_selector("#auto-opp")
-        check("「開始のたびに作り直す」で開始するとチームが変わる", [opp_names() != n2, pg.is_checked("#auto-opp")], [True, True])
+        foe = pg.locator("#b-cmd .pvfoe > span").evaluate_all("ss => ss.map(s => s.lastChild.textContent)")   # タイプの文字を除いた名前
+        check("表示していた おまかせ のチームと対戦する", sorted(foe) == sorted(n2), True)
+        pg.tap("[data-act='quit']"); pg.tap("[data-act='quit']"); pg.wait_for_selector("[data-reroll]")
+        check("対戦のあとは、次の おまかせ を作っておく", opp_names() != n2, True)
+        pg.tap("[data-saveauto]")
+        saved = pg.locator("[data-pickteam='opp']").input_value()
+        check("おまかせのチームを保存できる", [saved != "auto", "おまかせ" in pg.locator("[data-pickteam='opp'] option:checked").inner_text()], [True, True])
+        pg.goto(URL + f"#/team/{saved}"); pg.wait_for_selector(".slot")
+        check("チーム画面に型（役割）が出る", pg.locator(".slot .meta b").count(), 6)
+        pg.screenshot(path=str(SHOTS / "auto_team.png"), full_page=True)
+        check("  errors", errs, [])
+        ctx.close()
+
+        print("■ 複数のチーム")
+        ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+        pg, errs = open_page(ctx, "#/teams")
+        pg.wait_for_selector("[data-newteam]")
+        n_before = pg.evaluate("JSON.parse(localStorage.getItem('pd.bt.v2') || '{\"teams\":[]}').teams.length")
+        pg.select_option("#nt-rule", "sv_doubles")
+        pg.tap("[data-newteam='auto']"); pg.wait_for_selector("#t-name")
+        tid = pg.evaluate("location.hash.split('/')[2]")
+        check("おまかせで新しいチーム（SV・ダブル）", [pg.locator("a.slot:not(.empty)").count(), "SV・ダブル" in pg.inner_text("#v-team")], [6, True])
+        pg.fill("#t-name", "テスト用のチーム")
+        pg.goto(URL + "#/teams"); pg.wait_for_selector("#v-teams .card.team")
+        check("名前の変更が一覧に出る", "テスト用のチーム" in pg.inner_text("#v-teams"), True)
+        pg.goto(URL + f"#/team/{tid}"); pg.wait_for_selector("[data-dupteam]")
+        pg.tap("[data-dupteam]"); pg.wait_for_selector("#t-name")
+        check("複製すると「のコピー」ができる", pg.locator("#t-name").input_value(), "テスト用のチーム のコピー")
+        dup = pg.evaluate("location.hash.split('/')[2]")
+        pg.tap("[data-delteam]"); pg.tap("[data-delteam]"); pg.wait_for_selector("#v-teams .card")
+        n_after = pg.evaluate("JSON.parse(localStorage.getItem('pd.bt.v2')).teams.length")
+        check("削除は2回押しで（チームの数）", n_after - n_before, 1)
+        pg.locator(f"[data-useteam='{tid}']").tap(); pg.wait_for_selector("#start")
+        check("「このチームで対戦」でルールとチームが選ばれる",
+              [pg.locator("#seg-game [aria-pressed='true']").get_attribute("data-game"), pg.locator("#seg-rule [aria-pressed='true']").get_attribute("data-rule"),
+               pg.locator("[data-pickteam='you']").input_value()], ["sv", "doubles", tid])
+        check("  errors", errs, [])
+        ctx.close()
+
+        print("■ 以前の保存形式（ルールごとに2チーム）からの引き継ぎ")
+        ctx = new_context(b, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+        old = {"game": "ch", "rule": "singles", "cpu": True, "autoOpp": False, "teams": {"ch_singles": {
+            "you": [{"sp": "Garchomp", "item": "choicescarf", "ability": "roughskin", "moves": ["earthquake", "dragonclaw"], "nature": "Jolly",
+                     "evs": [2, 32, 0, 0, 0, 32], "ivs": [31] * 6, "tera": ""}],
+            "opp": [{"sp": "Gengar", "item": "focussash", "ability": "cursedbody", "moves": ["shadowball"], "nature": "Timid",
+                     "evs": [0, 0, 0, 32, 2, 32], "ivs": [31] * 6, "tera": ""}]}}}
+        ctx.add_init_script(f"localStorage.setItem('pd.bt.v1', {json.dumps(json.dumps(old))});")
+        pg, errs = open_page(ctx, "#/teams")
+        pg.wait_for_selector("#v-teams .card.team")
+        txt = pg.inner_text("#v-teams")
+        check("以前のチームが「あなたのチーム」「相手のチーム」として残る", ["あなたのチーム（チャンピオンズ・シングル）" in txt, "相手のチーム（チャンピオンズ・シングル）" in txt], [True, True])
+        check("  errors", errs, [])
+        ctx.close()
+
+        print("■ 図鑑からチーム編成（ブックマーク・チームに追加）")
+        ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+        pg, errs = open_page(ctx, "#/p/445")
+        pg.wait_for_selector("[data-act='bm']")
+        pg.tap("[data-act='bm']")
+        check("ブックマークのボタン", pg.inner_text("[data-act='bm']"), "★ ブックマーク済み")
+        pg.goto(URL + "#/p/10034"); pg.wait_for_selector("[data-act='bm']")   # メガリザードンX
+        pg.tap("[data-act='bm']")
+        pg.goto(URL + "#/"); pg.wait_for_selector("#list .row")
+        pg.fill("#q", "ガブリアス"); pg.wait_for_timeout(400)
+        check("一覧に★が付く", pg.locator("#list a[href='#/p/445'] .bmk").count(), 1)
+        pg.fill("#q", ""); pg.wait_for_timeout(300)
+        pg.tap("#f-more"); pg.check("#f-bm"); pg.wait_for_timeout(400)
+        check("「ブックマークしたポケモンだけ」で絞り込む", sorted(pg.locator("#list .row a").evaluate_all("as => as.map(a => a.getAttribute('href'))")), ["#/p/10034", "#/p/445"])
+        pg.goto(URL + "#/p/445"); pg.wait_for_selector("[data-act='tadd']")
+        pg.tap("[data-act='tadd']"); pg.wait_for_selector("#tadd [data-tnew]")
+        pg.tap("#tadd [data-tnew='ch_singles']"); pg.wait_for_timeout(300)
+        msg = pg.inner_text("#tadd-msg")
+        check("新しいチームを作ってガブリアスを入れる", ["ガブリアスを入れました（1/6）" in msg, pg.locator("#tadd-msg a").count()], [True, 1])
+        pg.locator("#tadd-msg a").tap(); pg.wait_for_selector("#v-team .slot")
+        check("「チームを開く」でチーム画面に（技も入っている）", [pg.locator("a.slot:not(.empty)").count(), pg.locator("a.slot .mv span").first.inner_text() != "—"], [1, True])
+        tid = pg.evaluate("location.hash.split('/')[2]")
+        pg.goto(URL + f"#/set/{tid}/1/pick/sp"); pg.wait_for_selector("#pick-list li")
+        heads = pg.locator("#pick-list li.hd").all_inner_texts()
+        bm = pg.locator("#pick-list [data-choose]").first
+        check("ポケモンを選ぶときにブックマークが先頭に出る", [heads[0].startswith("ブックマーク 2匹"), bm.locator(".bmk").count()], [True, 1])
+        pg.locator("#pick-list [data-choose^='Charizard|']").first.tap(); pg.wait_for_selector("#s-nat")
+        check("メガシンカの姿を選ぶと、元の姿＋メガストーンになる", unicodedata.normalize("NFKC", pg.inner_text("a.pickbtn[href$='/item']")), "リザードナイトX")
+        pg.goto(URL + "#/p/445"); pg.wait_for_selector("[data-act='tadd']")
+        pg.tap("[data-act='tadd']"); pg.wait_for_selector(f"#tadd [data-tadd='{tid}']")
+        pg.tap(f"#tadd [data-tadd='{tid}']"); pg.wait_for_timeout(300)
+        check("同じポケモンは入れられない", "もうガブリアスがいます" in pg.inner_text("#tadd-msg"), True)
+        pg.goto(URL + "#/p/1008"); pg.wait_for_selector("[data-act='tadd']")         # ミライドン（チャンピオンズでは使えない）
+        pg.tap("[data-act='tadd']"); pg.wait_for_selector("#tadd .tnew")
+        check("使えないルールのチームは押せない", [pg.locator(f"#tadd [data-tadd='{tid}']").is_disabled(), pg.locator("#tadd [data-tnew='ch_singles']").is_disabled()], [True, True])
+        pg.screenshot(path=str(SHOTS / "pokedex_tadd.png"), full_page=True)
+        check("  errors", errs, [])
+        ctx.close()
+
+        print("■ 連戦シミュレーション")
+        ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+        pg, errs = open_page(ctx, "#/sim")
+        pg.wait_for_selector("#sim-go")
+        pg.tap("[data-simn='10']"); pg.tap("#sim-go")
+        t0 = time.time()
+        pg.wait_for_function("document.querySelector('#sim-go') && document.querySelector('#sim-go').textContent === '開始' && document.querySelector('.simres')", timeout=240000)
+        res = pg.inner_text("#sim-out")
+        m = re.search(r"(\d+)勝 (\d+)敗(?: (\d+)分)?（(\d+)戦）", res)
+        print(f"  10戦 {time.time() - t0:.1f}秒：", m.group(0) if m else res[:80])
+        check("10戦して勝ち・負け・引き分けの合計が10", bool(m) and int(m.group(1)) + int(m.group(2)) + int(m.group(3) or 0) == 10 and m.group(4) == "10", True)
+        rows = pg.locator(".simres table").first.locator("tbody tr")
+        picks = [int(x.rstrip("%")) for x in rows.evaluate_all("rs => rs.map(r => r.cells[1].textContent)") if x.endswith("%")]
+        check("あなたの6匹の戦績（選出率の合計が 3匹 × 100%）", [rows.count(), sum(picks)], [6, 300])
+        check("手ごわかった相手の表", pg.locator(".simres table").count(), 2)
+        pg.screenshot(path=str(SHOTS / "sim.png"), full_page=True)
         check("  errors", errs, [])
         ctx.close()
 

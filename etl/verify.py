@@ -9,7 +9,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
-URL = (ROOT / "build" / "pokedex.html").as_uri()
+URL = (ROOT / "build" / "app.html").as_uri()   # 図鑑とバトルを1つにまとめたページ
 DB = sqlite3.connect(ROOT / "build" / "pokedex.sqlite")
 SHOTS = ROOT / "shots"
 SHOTS.mkdir(exist_ok=True)
@@ -114,7 +114,7 @@ def open_page(ctx, hash_=""):
     pg.on("pageerror", lambda e: errs.append(str(e)))
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" and "ERR_FAILED" not in m.text else None)
     pg.goto(URL + hash_)
-    pg.wait_for_selector("html[data-ready='1']", timeout=20000)
+    pg.wait_for_selector("html[data-pd-ready='1']", timeout=20000)
     pg.evaluate("document.fonts.ready")
     return pg, errs
 
@@ -165,7 +165,7 @@ def calc_ref(cases):
 
 def check_formula():
     """生成 HTML から計算関数そのものを取り出し、全ポケモンの種族値 × 全性格 × 設定の組み合わせで突き合わせる"""
-    html = (ROOT / "build" / "pokedex.html").read_text(encoding="utf-8")
+    html = (ROOT / "build" / "app.html").read_text(encoding="utf-8")
     body = html.split("// @stat-begin")[1].split("// @stat-end")[0].split("\n", 1)[1]
     bases = sorted({tuple(r) for r in DB.execute("select hp, atk, def, spa, spd, spe from pokemon")})
     script = NODE_PRELUDE + body + f"""
@@ -275,7 +275,7 @@ def verify_calc(b):
     pg.evaluate("document.getElementById('calc').scrollIntoView()")
     pg.screenshot(path=str(SHOTS / "m_calc_ch.png"))
     pg.reload()
-    pg.wait_for_selector("html[data-ready='1']")
+    pg.wait_for_selector("html[data-pd-ready='1']")
     check("再読み込みしても設定が残る", [pg.get_attribute('[data-cmode="ch"]', "aria-pressed"), inv_values(pg)],
           ["true", [1, 32, 1, 0, 0, 32]])
     pg.close()
@@ -436,7 +436,7 @@ def main():
         check("戻ると一覧のスクロール位置が復元される", abs(pg.evaluate("window.pageYOffset") - y_before) <= 2, True)
         check("一覧が表示される", pg.eval_on_selector("#list-view", "e => getComputedStyle(e).display") != "none", True)
 
-        pg.goto(URL + "#/p/6"); pg.wait_for_selector("html[data-ready='1']"); settle(pg, 500)
+        pg.goto(URL + "#/p/6"); pg.wait_for_selector("html[data-pd-ready='1']"); settle(pg, 500)
         vals = [int(v) for v in pg.eval_on_selector_all("#detail-view .strow .v", "e => e.map(x => x.textContent)")]
         check("種族値の合計", vals[6], sum(vals[:6]))
         check("リザードンの種族値", vals[:6], list(DB.execute("select hp,atk,def,spa,spd,spe from pokemon where id=6").fetchone()))
@@ -458,12 +458,12 @@ def main():
         pg.tap('[data-act="back"]'); settle(pg, 300)
         check("直接開いた詳細から戻ると一覧", pg.eval_on_selector("#detail-view", "e => e.hidden"), True)
         t0 = time.time()
-        pg.goto(URL + "#/m/182"); pg.wait_for_selector("html[data-ready='1']"); settle(pg, 100)
+        pg.goto(URL + "#/m/182"); pg.wait_for_selector("html[data-pd-ready='1']"); settle(pg, 100)
         print(f"  まもる の詳細（覚えるポケモン {pg.eval_on_selector_all('#lr .plist li', 'e => e.length')} 件）: {time.time() - t0:.2f}s")
-        pg.goto(URL + "#/a/22"); pg.wait_for_selector("html[data-ready='1']"); settle(pg, 300)
+        pg.goto(URL + "#/a/22"); pg.wait_for_selector("html[data-pd-ready='1']"); settle(pg, 300)
         check("特性の詳細", pg.inner_text("#detail-view h2"), "いかく")
         pg.screenshot(path=str(SHOTS / "m_detail_a22.png"))
-        pg.goto(URL + "#/p/99999"); pg.wait_for_selector("html[data-ready='1']"); settle(pg, 200)
+        pg.goto(URL + "#/p/99999"); pg.wait_for_selector("html[data-pd-ready='1']"); settle(pg, 200)
         check("存在しない番号は案内を出す", "見つかりません" in pg.inner_text("#detail-view"), True)
         print("  console/page errors:", errs or "なし")
         mob.close()
@@ -484,7 +484,7 @@ def main():
         pg, errs = open_page(dark)
         check("背景色（ダーク）", pg.evaluate("getComputedStyle(document.body).backgroundColor"), "rgb(14, 17, 23)")
         pg.screenshot(path=str(SHOTS / "m_dark_list.png"))
-        pg.goto(URL + "#/p/445"); pg.wait_for_selector("html[data-ready='1']"); settle(pg, 500)
+        pg.goto(URL + "#/p/445"); pg.wait_for_selector("html[data-pd-ready='1']"); settle(pg, 500)
         pg.screenshot(path=str(SHOTS / "m_dark_detail.png"))
         dark.close()
 

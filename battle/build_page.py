@@ -39,7 +39,6 @@ def main():
     page = put(page, "/*__LIC_CHACHA__*/", lic(B / "node_modules/ts-chacha20/LICENSE"), "lic-chacha")
     page = put(page, "/*__LIC_POKEAPI__*/", lic(ROOT / "cache/LICENSE_pokeapi.md"), "lic-pokeapi")
     page = put(page, "/*__DATA__*/", data, "data")
-    page = put(page, "/*__LINK_POKEDEX__*/", html.escape(os.environ.get("LINK_POKEDEX", "index.html")), "link")
     page = put(page, "/*__JS__*/", js, "js")
     page = put(page, "/*__ENGINE__*/", engine, "engine")   # 最後に入れる（中の文字列に印が含まれていても影響しないように）
     required = {"タッチ判定": "cameFromTouch", "エンジン": "PSEngine", "hidden の優先": "[hidden] { display: none !important; }",

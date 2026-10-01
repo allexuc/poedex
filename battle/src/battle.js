@@ -3,9 +3,9 @@
 
   // ---- データの配列レイアウト（build_battle_data.py の docstring と必ず一致させる） ----
   const SP_ID = 0, SP_PS = 1, SP_NUM = 2, SP_DISP = 3, SP_BASE = 4, SP_T1 = 5, SP_T2 = 6, SP_ST = 7, SP_AB = 8, SP_MV = 9, SP_REQ = 10, SP_NFE = 11,
-    SP_RESTR = 12, SP_EVENT = 13;
+    SP_RESTR = 12, SP_EVENT = 13, SP_PID = 14;
   const MV_ID = 0, MV_JA = 1, MV_TYPE = 2, MV_CAT = 3, MV_BP = 4, MV_ACC = 5, MV_PP = 6, MV_PRIO = 7, MV_TGT = 8, MV_TRAIT = 9, MV_HITS = 10;
-  const MG_ITEM = 0, MG_BASE = 1, MG_DISP = 3, MG_T1 = 4, MG_T2 = 5, MG_ST = 6, MG_AB = 7;
+  const MG_ITEM = 0, MG_BASE = 1, MG_DISP = 3, MG_T1 = 4, MG_T2 = 5, MG_ST = 6, MG_AB = 7, MG_PID = 8;
   const IT_ID = 0, IT_JA = 1, IT_MEGA = 2;
 
   const STAT_IDS = ['hp', 'atk', 'def', 'spa', 'spd', 'spe'];
@@ -31,6 +31,7 @@
   const AUTOTEST = /[?&]autotest=1/.test(location.search);   // 検証用：両方を CPU にして自動で対戦させる
 
   const $ = id => document.getElementById(id);
+  const ROOT = document.getElementById('bt') || document.body;   // 図鑑と1つのページにしたときの、バトル側の要素
   const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ESC[c]);
   const toID = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -127,7 +128,9 @@
   const natUD = en => { const n = natByEn.get(en); return n ? [n[2], n[3]] : [0, 0]; };
 
   // ---- 状態（ルール・チーム） -------------------------------------------
-  const S = { game: 'ch', rule: 'singles', cpu: true, teams: {} };
+  // チームは何個でも持てる：teams = [{ id, name, game, rule, sets }]。
+  // 対戦ではルールごとに sel[ゲーム_形式] = { you: チームID, opp: チームID か 'auto'（おまかせ）} を使う
+  const S = { game: 'ch', rule: 'singles', cpu: true, teams: [], sel: {}, autoPrev: {}, autoUsed: {}, simTeam: '', simN: 30 };
   const key = () => S.game + '_' + S.rule;
   const fmtInfo = () => D.games[S.game].formats[S.rule];
   const gd = () => GD[S.game];
@@ -181,39 +184,92 @@
     if (!D.samples[k]) return autoTeam(g, rule);     // ルールが変わってサンプルが使えなくなったとき
     return PSEngine.Teams.unpack(D.samples[k]).map(p => fromPS(p, g, notes)).filter(Boolean);
   }
-  function team(side) {
-    const k = key();
-    if (!S.teams[k]) S.teams[k] = {};
-    if (!Array.isArray(S.teams[k][side])) S.teams[k][side] = sampleTeam(k);
-    return S.teams[k][side];
+  const RULE_JA = { singles: 'シングル', doubles: 'ダブル' }, GAME_JA = { ch: 'チャンピオンズ', sv: 'SV' };
+  const ruleLabel = (g, r) => `${GAME_JA[g]}・${RULE_JA[r]}`;
+  const newId = () => 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const teamById = id => S.teams.find(t => t.id === id) || null;
+  const teamsFor = (g, r) => S.teams.filter(t => t.game === g && t.rule === r);
+  function addTeam(g, r, name, sets) {
+    const t = { id: newId(), name, game: g, rule: r, sets };
+    S.teams.push(t);
+    return t;
   }
-  const save = () => store.set('pd.bt.v1', JSON.stringify(S));
+  function uniqueName(base) {
+    let n = base, i = 2;
+    while (S.teams.some(t => t.name === n)) n = `${base} ${i++}`;
+    return n;
+  }
+  function selOf(g, r) {                    // そのルールで選んでいるチーム（なければサンプルから作る）
+    const k = g + '_' + r, s = S.sel[k] || (S.sel[k] = {});
+    const ok = id => { const t = teamById(id); return !!t && t.game === g && t.rule === r; };
+    if (!ok(s.you)) s.you = (teamsFor(g, r)[0] || addTeam(g, r, uniqueName(`サンプル（${ruleLabel(g, r)}）`), sampleTeam(k))).id;
+    if (s.opp !== 'auto' && !ok(s.opp)) s.opp = 'auto';
+    return s;
+  }
+  function autoPreview(g, r) {              // 相手が おまかせ のときに、次の対戦で使うチーム
+    const k = g + '_' + r;
+    if (!S.autoPrev[k] || S.autoUsed[k]) { S.autoPrev[k] = autoTeam(g, r); S.autoUsed[k] = false; }
+    return S.autoPrev[k];
+  }
+  function team(side) {                     // 対戦で使う6匹
+    const s = selOf(S.game, S.rule);
+    if (side === 'you') return teamById(s.you).sets;
+    return s.opp === 'auto' ? autoPreview(S.game, S.rule) : teamById(s.opp).sets;
+  }
+  const bookmarks = () => { try { const a = JSON.parse(store.get('pd.bookmarks') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
+  function findByPid(g, pid) {              // 図鑑のポケモン（pokemon_id）→ このゲームで使える姿（メガシンカは元の姿＋メガストーン）
+    const G = GD[g], sp = G.species.find(x => x[SP_PID] === pid);
+    if (sp) return { sp, mega: null };
+    const mg = (G.megas || []).find(m => m[MG_PID] === pid), base = mg && G.byPs.get(mg[MG_BASE]);
+    return base ? { sp: base, mega: mg } : null;
+  }
+
+  const save = () => store.set('pd.bt.v2', JSON.stringify({ game: S.game, rule: S.rule, cpu: S.cpu, teams: S.teams, sel: S.sel,
+    autoPrev: S.autoPrev, simN: S.simN, simTeam: S.simTeam }));
+  function cleanSets(arr, g) {             // 保存されていた6匹を、今のデータで使えるか確かめ直す
+    return arr.filter(x => x && GD[g].byPs.has(x.sp)).map(x => {
+      const y = fromPS({ species: GD[g].byPs.get(x.sp)[SP_ID], ability: x.ability, item: x.item, moves: x.moves, nature: x.nature, teraType: x.tera,
+        evs: Object.fromEntries(STAT_IDS.map((k, i) => [k, (x.evs || [])[i] || 0])),
+        ivs: Object.fromEntries(STAT_IDS.map((k, i) => [k, Number.isInteger((x.ivs || [])[i]) ? x.ivs[i] : 31])) }, g, []);
+      if (y && x.note) y.note = String(x.note);
+      return y;
+    }).filter(Boolean).slice(0, 6);
+  }
   function load() {
     let o = null;
-    try { o = JSON.parse(store.get('pd.bt.v1') || 'null'); } catch (e) { o = null; }
+    try { o = JSON.parse(store.get('pd.bt.v2') || 'null'); } catch (e) { o = null; }
+    if (!o) {                                // 以前の保存形式（ルールごとに あなた・相手 の2チーム）から移す
+      let v1 = null;
+      try { v1 = JSON.parse(store.get('pd.bt.v1') || 'null'); } catch (e) { v1 = null; }
+      if (v1 && typeof v1 === 'object') {
+        o = { game: v1.game, rule: v1.rule, cpu: v1.cpu, teams: [], sel: {} };
+        for (const k in v1.teams || {}) {
+          const [g, r] = k.split('_');
+          if (!GD[g] || !RULE_JA[r]) continue;
+          for (const side of ['you', 'opp']) {
+            if (!Array.isArray((v1.teams[k] || {})[side])) continue;
+            const id = newId() + side;
+            o.teams.push({ id, name: `${side === 'you' ? 'あなた' : '相手'}のチーム（${ruleLabel(g, r)}）`, game: g, rule: r, sets: v1.teams[k][side] });
+            (o.sel[k] = o.sel[k] || {})[side] = id;
+          }
+          if (v1.autoOpp) (o.sel[k] = o.sel[k] || {}).opp = 'auto';
+        }
+      }
+    }
     if (!o || typeof o !== 'object') return;
     if (o.game === 'ch' || o.game === 'sv') S.game = o.game;
     if (o.rule === 'singles' || o.rule === 'doubles') S.rule = o.rule;
     S.cpu = o.cpu !== false;
-    S.autoOpp = o.autoOpp === true;
-    if (o.teams && typeof o.teams === 'object') {
-      for (const k in o.teams) {
-        const g = k.split('_')[0];
-        if (!GD[g]) continue;
-        S.teams[k] = {};
-        for (const side of ['you', 'opp']) {
-          const arr = o.teams[k][side];
-          if (!Array.isArray(arr)) continue;
-          // 保存されていたチームも、今のデータで使えるかを確かめ直す
-          S.teams[k][side] = arr.filter(s => s && GD[g].byPs.has(s.sp)).map(s => fromPS({
-            species: GD[g].byPs.get(s.sp)[SP_ID], ability: s.ability, item: s.item, moves: s.moves, nature: s.nature, teraType: s.tera,
-            evs: Object.fromEntries(STAT_IDS.map((x, i) => [x, (s.evs || [])[i] || 0])),
-            ivs: Object.fromEntries(STAT_IDS.map((x, i) => [x, Number.isInteger((s.ivs || [])[i]) ? s.ivs[i] : 31])),
-          }, g, [])).map((x, i) => (x && arr[i] && arr[i].note ? Object.assign(x, { note: String(arr[i].note) }) : x)).filter(Boolean).slice(0, 6);
-        }
-      }
+    if (Array.isArray(o.teams)) {
+      S.teams = o.teams.filter(t => t && GD[t.game] && RULE_JA[t.rule] && Array.isArray(t.sets))
+        .map(t => ({ id: String(t.id), name: String(t.name || 'チーム').slice(0, 40), game: t.game, rule: t.rule, sets: cleanSets(t.sets, t.game) }));
     }
+    if (o.sel && typeof o.sel === 'object') S.sel = o.sel;
+    for (const k in o.autoPrev || {}) { const g = k.split('_')[0]; if (GD[g] && Array.isArray(o.autoPrev[k])) S.autoPrev[k] = cleanSets(o.autoPrev[k], g); }
+    if ([10, 30, 100].includes(o.simN)) S.simN = o.simN;
+    if (typeof o.simTeam === 'string') S.simTeam = o.simTeam;
   }
+
   function problems() {
     const out = [], f = fmtInfo(), G = gd(), lim = LIMIT(S.game);
     for (const side of ['you', 'opp']) {
@@ -242,20 +298,32 @@
     document.body.classList.toggle('in-battle', name === 'battle');
     window.scrollTo(0, 0);
   }
+  const BT_ROUTE = /^#\/(b|teams|team|set|battle|sim)(\/|$)/;
+  const MERGED = !!document.getElementById('pd');   // 図鑑と1つのページにまとめた版
   function route() {
     const h = location.hash;
+    if (MERGED && !BT_ROUTE.test(h)) return;           // 図鑑の画面
     let m;
-    if ((m = /^#\/team\/(you|opp)$/.exec(h))) { renderTeam(m[1]); showView('team'); }
-    else if ((m = /^#\/set\/(you|opp)\/([0-5])\/pick\/(sp|item|move)([0-3]?)$/.exec(h))) {
-      if (m[3] !== 'sp' && !team(m[1])[+m[2]]) { location.replace(`#/team/${m[1]}`); return; }
+    // チームを編集するときは、そのチームのルールに合わせる（使える技や能力ポイントの上限が変わるため）
+    const useTeam = id => { const t = teamById(id); if (t) { S.game = t.game; S.rule = t.rule; } return t; };
+    if (h === '#/teams') { renderTeams(); showView('teams'); }
+    else if (h === '#/sim') { renderSim(); showView('sim'); }
+    else if ((m = /^#\/team\/([\w-]+)$/.exec(h))) {
+      if (!useTeam(m[1])) { location.replace('#/teams'); return; }
+      renderTeam(m[1]); showView('team');
+    } else if ((m = /^#\/set\/([\w-]+)\/([0-5])\/pick\/(sp|item|move)([0-3]?)$/.exec(h))) {
+      const t = useTeam(m[1]);
+      if (!t || (m[3] !== 'sp' && !t.sets[+m[2]])) { location.replace(t ? `#/team/${m[1]}` : '#/teams'); return; }
       renderPick(m[1], +m[2], m[3], +(m[4] || 0)); showView('pick');
-    }
-    else if ((m = /^#\/set\/(you|opp)\/([0-5])$/.exec(h))) {
-      if (!team(m[1])[+m[2]]) { location.replace(`#/set/${m[1]}/${Math.min(+m[2], team(m[1]).length)}/pick/sp`); return; }
+    } else if ((m = /^#\/set\/([\w-]+)\/([0-5])$/.exec(h))) {
+      const t = useTeam(m[1]);
+      if (!t) { location.replace('#/teams'); return; }
+      if (!t.sets[+m[2]]) { location.replace(`#/set/${m[1]}/${Math.min(+m[2], t.sets.length)}/pick/sp`); return; }
       renderSet(m[1], +m[2]); showView('set');
-    } else if (h === '#/battle' && B) { showView('battle'); renderField(); renderCmd(); }
+    } else if (h === '#/battle' && B && !B.headless) { showView('battle'); renderField(); renderCmd(); }
     else { renderSetup(); showView('setup'); }
   }
+
 
   // ---- ルールとチームの画面 ------------------------------------------------
   function ruleNote() {
@@ -267,54 +335,70 @@
     if (G.restrictedLimit < 6) parts.push(`禁止級の伝説のポケモンは${G.restrictedLimit}匹まで`);
     return `${S.game === 'ch' ? 'Pokémon Champions' : 'SV'} のランクバトルと同じルール（${esc(f.name)}）：${parts.join('・')}`;
   }
-  function monChip(s) {
-    const G = gd(), sp = G.byPs.get(s.sp);
+  function monChip(s, g) {
+    const sp = GD[g || S.game].byPs.get(s.sp);
     return `<li class="mon">${tts(sp)}<span style="min-width:0"><span class="nm">${esc(sp[SP_DISP])}</span>` +
       `<span class="it">${s.item ? esc(jaItem(s.item)) : '持ち物なし'}</span></span></li>`;
+  }
+
+  function teamInfo(sets, g) {             // 弱点の補完・メガシンカの数・天候やフィールドの役
+    if (!sets.length) return '';
+    const fs = teamForms(sets, g), c = coverOf(fs), megas = fs.filter(f => f.mega).length, th = themeOf(sets, g);
+    return `<p class="fine">弱点を受けられる仲間がいる割合：<b>${Math.round(c.ratio * 100)}%</b>${GD[g].megas.length ? `・メガシンカ ${megas}匹` : ''}` +
+      `${th ? `・${MODES[th.mode].kind === 'w' ? '天候' : 'フィールド'}：${MODES[th.mode].ja}（${esc(th.name)}）` : ''}</p>`;
+  }
+  function chips(sets, g) {
+    const items = [];
+    for (let i = 0; i < 6; i++) items.push(sets[i] ? monChip(sets[i], g) : '<li class="mon empty">空き</li>');
+    return `<ul class="mons">${items.join('')}</ul>`;
   }
   function renderSetup() {
     for (const b of $('seg-game').children) b.setAttribute('aria-pressed', String(b.dataset.game === S.game));
     for (const b of $('seg-rule').children) b.setAttribute('aria-pressed', String(b.dataset.rule === S.rule));
     for (const b of $('seg-cpu').children) b.setAttribute('aria-pressed', String((b.dataset.cpu === '1') === S.cpu));
     $('rule-note').innerHTML = ruleNote();
+    const sel = selOf(S.game, S.rule), list = teamsFor(S.game, S.rule);
     $('teams').innerHTML = ['you', 'opp'].map(side => {
-      const t = team(side);
-      const items = [];
-      for (let i = 0; i < 6; i++) items.push(t[i] ? monChip(t[i]) : '<li class="mon empty">空き</li>');
-      const fs = teamForms(t, S.game), c = coverOf(fs), megas = fs.filter(f => f.mega).length;
-      const th = themeOf(t, S.game);
-      const info = t.length ? `<p class="fine">弱点を受けられる仲間がいる割合：<b>${Math.round(c.ratio * 100)}%</b>${gd().megas.length ? `・メガシンカ ${megas}匹` : ''}` +
-        `${th ? `・${MODES[th.mode].kind === 'w' ? '天候' : 'フィールド'}：${MODES[th.mode].ja}（${esc(th.name)}）` : ''}</p>` : '';
-      return `<div class="card team"><h3>${sideJa(side)}のチーム<span class="n">${t.length}/6</span></h3><ul class="mons">${items.join('')}</ul>${info}` +
-        `<div class="acts"><a class="btn" href="#/team/${side}">編集する</a><button type="button" class="btn" data-sample="${side}">サンプルに戻す</button>` +
-        (side === 'opp' ? '<button type="button" class="btn ink" data-auto="opp">おまかせ</button></div>' +
-          `<label class="check"><input type="checkbox" id="auto-opp"${S.autoOpp ? ' checked' : ''}>バトル開始のたびに おまかせで作り直す</label></div>` : '</div></div>');
+      const t = team(side), auto = side === 'opp' && sel.opp === 'auto', tid = side === 'you' ? sel.you : sel.opp;
+      const opts = (side === 'opp' ? `<option value="auto"${auto ? ' selected' : ''}>おまかせ（対戦のたびに新しく作る）</option>` : '') +
+        list.map(x => `<option value="${x.id}"${x.id === tid ? ' selected' : ''}>${esc(x.name)}</option>`).join('');
+      return `<div class="card team"><h3>${sideJa(side)}のチーム<span class="n">${t.length}/6</span></h3>` +
+        `<span class="sel"><select data-pickteam="${side}" aria-label="${sideJa(side)}のチーム">${opts}</select></span>${chips(t, S.game)}${teamInfo(t, S.game)}` +
+        '<div class="acts">' + (auto
+          ? '<button type="button" class="btn ink" data-reroll="1">別のおまかせにする</button><button type="button" class="btn" data-saveauto="1">このチームを保存</button>'
+          : `<a class="btn" href="#/team/${tid}">編集する</a>`) + '<a class="btn" href="#/teams">チーム一覧</a></div></div>';
     }).join('');
     const probs = problems();
     $('problems').hidden = !probs.length;
     $('problems').innerHTML = probs.map(esc).join('<br>');
     $('start').disabled = probs.length > 0;
+    save();
   }
-  function renderTeam(side) {
-    const t = team(side), G = gd();
-    let h = bar(`${sideJa(side)}のチーム`, '#/', 'ルールに戻る') + '<ul class="slots">';
+
+  function renderTeam(tid) {
+    const tm = teamById(tid), t = tm.sets, G = GD[tm.game];
+    let h = bar(tm.name, '#/teams', 'チーム一覧') +
+      `<div class="field"><span class="flab">チームの名前（${ruleLabel(tm.game, tm.rule)}）</span>` +
+      `<input class="tname" id="t-name" value="${esc(tm.name)}" maxlength="40" autocomplete="off" aria-label="チームの名前"></div><ul class="slots">`;
     t.forEach((s, i) => {
       const sp = G.byPs.get(s.sp);
-      h += `<li><a class="slot" href="#/set/${side}/${i}"><span class="top">${esc(sp[SP_DISP])}<span class="types">${tt(sp[SP_T1])}${sp[SP_T2] >= 0 ? tt(sp[SP_T2]) : ''}</span></span>` +
+      h += `<li><a class="slot" href="#/set/${tid}/${i}"><span class="top">${esc(sp[SP_DISP])}<span class="types">${tt(sp[SP_T1])}${sp[SP_T2] >= 0 ? tt(sp[SP_T2]) : ''}</span></span>` +
         `<span class="meta">${s.note ? `<b>${esc(s.note)}</b>・` : ''}${esc(jaAbil(s.ability))}・${s.item ? esc(jaItem(s.item)) : '持ち物なし'}${G.tera && s.tera ? `・テラス ${esc(jaType(s.tera))}` : ''}</span>` +
         `<span class="mv">${[0, 1, 2, 3].map(k => `<span>${s.moves[k] ? esc(jaMove(s.moves[k])) : '—'}</span>`).join('')}</span></a></li>`;
     });
-    if (t.length < 6) h += `<li><a class="slot empty" href="#/set/${side}/${t.length}/pick/sp">＋ ポケモンを追加</a></li>`;
-    h += '</ul><div class="opts">' +
-      `<button type="button" class="btn" data-sample="${side}">サンプルに戻す</button>${side === 'opp' ? '<button type="button" class="btn ink" data-auto="opp">おまかせで作る</button>' : ''}` +
-      `<button type="button" class="btn" data-copyto="${side === 'you' ? 'opp' : 'you'}">${side === 'you' ? '相手' : 'あなた'}のチームにコピー</button></div>`;
+    if (t.length < 6) h += `<li><a class="slot empty" href="#/set/${tid}/${t.length}/pick/sp">＋ ポケモンを追加</a></li>`;
+    h += `</ul>${teamInfo(t, tm.game)}<div class="opts">` +
+      `<button type="button" class="btn ink" data-useteam="${tid}">このチームで対戦</button><button type="button" class="btn" data-simteam="${tid}">連戦する</button>` +
+      `<button type="button" class="btn" data-dupteam="${tid}">複製</button><button type="button" class="btn" data-autoteam="${tid}">おまかせで作り直す</button>` +
+      `<button type="button" class="btn warn" data-delteam="${tid}">このチームを削除</button></div>`;
     h += '<h2 class="sec">テキストで読み込み・書き出し</h2><p class="fine">Pokémon Showdown と同じ形式（英語）です。対戦サイトなどで公開されているチームを貼り付けて読み込めます。</p>' +
       `<textarea class="paste" id="paste" spellcheck="false" autocapitalize="off" aria-label="チームのテキスト">${esc(PSEngine.Teams.export(t.map(s => toPSEnglish(s, S.game))))}</textarea>` +
-      `<div class="opts"><button type="button" class="btn ink" data-paste="${side}">貼り付けて読み込む</button>` +
-      `<button type="button" class="btn" data-copyteam="${side}">今の編成をコピー</button>` +
-      `<button type="button" class="btn" data-import="${side}">この欄の内容で読み込む</button></div><p class="fine" id="import-notes"></p>`;
+      `<div class="opts"><button type="button" class="btn ink" data-paste="${tid}">貼り付けて読み込む</button>` +
+      `<button type="button" class="btn" data-copyteam="${tid}">今の編成をコピー</button>` +
+      `<button type="button" class="btn" data-import="${tid}">この欄の内容で読み込む</button></div><p class="fine" id="import-notes"></p>`;
     V.team.innerHTML = h;
   }
+
   // クリップボード：使えない環境（埋め込み表示など）では、選択してコピーする方法に切り替える
   async function copyText(text) {
     try { await navigator.clipboard.writeText(text); return true; } catch (e) { /* 次の方法を試す */ }
@@ -326,7 +410,7 @@
     ta.remove();
     return ok;
   }
-  async function pasteImport(side) {
+  async function pasteImport(tid) {
     let text = '';
     try { text = navigator.clipboard && navigator.clipboard.readText ? await navigator.clipboard.readText() : ''; } catch (e) { text = ''; }
     if (!text.trim()) {
@@ -335,24 +419,27 @@
       return;
     }
     $('paste').value = text;
-    importText(side);
+    importText(tid);
   }
-  async function copyTeam(side) {
-    const text = PSEngine.Teams.export(team(side).map(s => toPSEnglish(s, S.game)));
+
+  async function copyTeam(tid) {
+    const tm = teamById(tid), text = PSEngine.Teams.export(tm.sets.map(x => toPSEnglish(x, tm.game)));
     const ok = await copyText(text);
-    $('import-notes').textContent = ok ? `${sideJa(side)}のチームをコピーしました（Pokémon Showdown の形式）。` : 'コピーできませんでした。下の欄を長押しして選択してください。';
+    $('import-notes').textContent = ok ? `「${tm.name}」をコピーしました（Pokémon Showdown の形式）。` : 'コピーできませんでした。下の欄を長押しして選択してください。';
   }
-  function importText(side) {
+
+  function importText(tid) {
     const text = $('paste').value, notes = [];
     let sets = [];
     try { sets = PSEngine.Teams.import(text) || []; } catch (e) { sets = []; }
     if (!sets.length) { $('import-notes').textContent = '読み込めるポケモンが見つかりませんでした。Pokémon Showdown の形式か確かめてください。'; return; }
     const t = sets.map(p => fromPS(p, S.game, notes)).filter(Boolean).slice(0, 6);
-    S.teams[key()][side] = t;
+    teamById(tid).sets = t;
     save();
-    renderTeam(side);
+    renderTeam(tid);
     $('import-notes').innerHTML = `${t.length}匹を読み込みました。` + (notes.length ? '<br>' + notes.map(esc).join('<br>') : '');
   }
+
 
   // ---- 1体の編集 ----------------------------------------------------------
   function natureOptions(cur) {
@@ -384,10 +471,10 @@
     return h + `</tbody></table></div><p class="total${tot > lim.total ? ' over' : ''}">${ch ? '能力ポイント' : '努力値'}の合計 ${tot} / ${lim.total}` +
       (tot > lim.total ? '（上限を超えています）' : `（残り ${lim.total - tot}）`) + '</p>';
   }
-  function renderSet(side, i) {
-    const set = team(side)[i], G = gd(), sp = G.byPs.get(set.sp);
-    const base = `#/set/${side}/${i}/pick/`;
-    let h = bar(`${sideJa(side)}のチーム ${i + 1}匹目`, `#/team/${side}`);
+  function renderSet(tid, i) {
+    const tm = teamById(tid), set = tm.sets[i], G = gd(), sp = G.byPs.get(set.sp);
+    const base = `#/set/${tid}/${i}/pick/`;
+    let h = bar(`${tm.name} ${i + 1}匹目`, `#/team/${tid}`);
     h += `<div class="field"><span class="flab">ポケモン</span><a class="pickbtn" href="${base}sp">${tt(sp[SP_T1])}${sp[SP_T2] >= 0 ? tt(sp[SP_T2]) : ''}<span class="pnm">${esc(sp[SP_DISP])}</span>` +
       `<span class="sub">${STAT_KEYS.map((k, j) => k + sp[SP_ST][j]).join(' ')}</span></a></div>`;
     h += `<div class="field"><span class="flab">特性</span><span class="sel"><select id="s-ab" aria-label="特性">${abilIds(sp).map(a =>
@@ -403,14 +490,15 @@
         `<option value="${TYPES[ti][0]}"${TYPES[ti][0] === set.tera ? ' selected' : ''}>${esc(TYPES[ti][1])}</option>`).join('')}</select></span></div>`;
     }
     h += `<div class="field"><span class="flab">${G.statPoints ? '能力ポイント' : '個体値・努力値'}（Lv.50の実数値）</span><div id="s-stats">${statsHTML(set, sp)}</div></div>`;
-    h += `<div class="opts" style="margin-top:16px"><button type="button" class="btn warn" data-remove="${side}:${i}">このポケモンを外す</button></div>`;
+    h += `<div class="opts" style="margin-top:16px"><button type="button" class="btn warn" data-remove="${tid}:${i}">このポケモンを外す</button></div>`;
     V.set.innerHTML = h;
-    V.set.dataset.ref = `${side}:${i}`;
+    V.set.dataset.ref = `${tid}:${i}`;
   }
   function curSet() {
-    const [side, i] = (V.set.dataset.ref || '').split(':');
-    return side ? { side, i: +i, set: team(side)[+i] } : null;
+    const [tid, i] = (V.set.dataset.ref || '').split(':'), tm = teamById(tid);
+    return tm && tm.sets[+i] ? { tid, i: +i, set: tm.sets[+i] } : null;
   }
+
   function stepEV(set, sp, i, dir) {
     const g = S.game, ch = GD[g].statPoints, lim = LIMIT(g), [up, down] = natUD(set.nature);
     const st = v => calcStat(g, i, sp[SP_ST][i], 50, ch ? 31 : set.ivs[i], v, up, down);
@@ -428,27 +516,36 @@
 
   // ---- 選択リスト ----------------------------------------------------------
   let pickCtx = null, pickFromSet = false;
-  function renderPick(side, i, kind, slot) {
-    pickCtx = { side, i, kind, slot };
+  function renderPick(tid, i, kind, slot) {
+    pickCtx = { tid, i, kind, slot };
     const title = kind === 'sp' ? 'ポケモンを選ぶ' : kind === 'item' ? '持ち物を選ぶ' : `技${slot + 1}を選ぶ`;
-    const back = team(side)[i] ? `#/set/${side}/${i}` : `#/team/${side}`;
+    const back = teamById(tid).sets[i] ? `#/set/${tid}/${i}` : `#/team/${tid}`;
     V.pick.innerHTML = bar(title, back) + '<div class="pick-top"><input id="pick-q" type="search" autocomplete="off" autocapitalize="off" spellcheck="false" ' +
       `placeholder="${kind === 'sp' ? 'ポケモンの名前' : kind === 'item' ? '持ち物の名前' : '技の名前'}で絞り込み" aria-label="絞り込み"></div><ul class="plist" id="pick-list"></ul>`;
     renderPickList('');
   }
+
   function pickRows() {
-    const { side, i, kind, slot } = pickCtx, G = gd(), set = team(side)[i];
+    const { tid, i, kind, slot } = pickCtx, G = gd(), set = teamById(tid).sets[i];
     if (kind === 'sp') {
-      return G.species.map(s => ({ key: s[SP_PS], name: s[SP_DISP], q: norm(s[SP_DISP] + s[SP_BASE] + s[SP_PS]),
-        left: tt(s[SP_T1]) + (s[SP_T2] >= 0 ? tt(s[SP_T2]) : ''), right: `合計 ${s[SP_ST].reduce((a, b) => a + b, 0)}`, cur: set && set.sp === s[SP_PS] }))
-        .sort((a, b) => collator.compare(a.name, b.name));
+      // 図鑑でブックマークしたポケモンを先頭に（メガシンカの姿は、元の姿＋メガストーンで出す）
+      const row = (sp, mg) => {
+        const st = mg ? mg[MG_ST] : sp[SP_ST], t1 = mg ? mg[MG_T1] : sp[SP_T1], t2 = mg ? mg[MG_T2] : sp[SP_T2], name = mg ? mg[MG_DISP] : sp[SP_DISP];
+        return { key: mg ? `${sp[SP_PS]}|${ITEMS[mg[MG_ITEM]][IT_ID]}` : sp[SP_PS], name, q: norm(name + sp[SP_BASE] + sp[SP_PS]),
+          left: tt(t1) + (t2 >= 0 ? tt(t2) : ''), right: `合計 ${st.reduce((x, y) => x + y, 0)}`, cur: !mg && !!set && set.sp === sp[SP_PS] };
+      };
+      const all = G.species.map(sp => row(sp, null)).sort((x, y) => collator.compare(x.name, y.name));
+      const bm = bookmarks(), hits = bm.map(pid => findByPid(S.game, pid)).filter(Boolean).map(h => Object.assign(row(h.sp, h.mega), { bm: true }));
+      if (!bm.length) return all;
+      const miss = bm.length - hits.length;
+      return [{ head: `ブックマーク ${hits.length}匹${miss ? `（このルールで使えないもの ${miss}匹）` : ''}` }].concat(hits, [{ head: 'すべてのポケモン' }], all);
     }
     const sp = G.byPs.get(set.sp);
     if (kind === 'item') {
       const rows = G.itemIds.map(id => {
         const it = iById.get(id), mega = !!it[IT_MEGA] && it[IT_MEGA] === sp[SP_PS];
         return { key: id, name: it[IT_JA], q: norm(it[IT_JA] + id), left: '', right: mega ? 'メガシンカ' : '', cur: set.item === id, top: mega };
-      }).sort((a, b) => (b.top - a.top) || collator.compare(a.name, b.name));
+      }).sort((x, y) => (y.top - x.top) || collator.compare(x.name, y.name));
       return [{ key: '', name: '持ち物なし', q: '', left: '', right: '', cur: !set.item }].concat(rows);
     }
     const chosen = new Set(set.moves.filter((m, k) => k !== slot));
@@ -457,32 +554,42 @@
       return { key: id, name: m[MV_JA], q: norm(m[MV_JA] + id), left: tt(m[MV_TYPE]),
         right: `<span class="cls c${m[MV_CAT]}">${CAT_JA[m[MV_CAT]]}</span> ${m[MV_BP] || '—'} / ${m[MV_ACC] == null ? '—' : m[MV_ACC]}`,
         cur: set.moves[slot] === id, t: TYPE_ORDER.indexOf(m[MV_TYPE]) };
-    }).sort((a, b) => a.t - b.t || collator.compare(a.name, b.name));
+    }).sort((x, y) => x.t - y.t || collator.compare(x.name, y.name));
     return (set.moves[slot] ? [{ key: '', name: 'この技を外す', q: '', left: '', right: '', cur: false }] : []).concat(rows);
   }
+
   function renderPickList(q) {
     const qn = norm(q), all = pickRows(), LIMIT_ROWS = 400;
-    const rows = qn ? all.filter(r => r.q.includes(qn)) : all;
-    let h = rows.slice(0, LIMIT_ROWS).map(r => `<li><button type="button" data-choose="${esc(r.key)}"${r.cur ? ' aria-current="true"' : ''}>` +
-      `<span class="tts">${r.left}</span><span class="nm">${esc(r.name)}</span><span class="rt">${r.right}</span></button></li>`).join('');
-    if (!rows.length) h = '<li class="fine">見つかりません</li>';
+    let rows = qn ? all.filter(r => !r.head && r.q.includes(qn)) : all;
+    if (qn) { const seen = new Set(); rows = rows.filter(r => !seen.has(r.key) && !!seen.add(r.key)); }
+    const n = rows.filter(r => !r.head).length;
+    let h = rows.slice(0, LIMIT_ROWS).map(r => r.head ? `<li class="hd">${esc(r.head)}</li>` :
+      `<li><button type="button" data-choose="${esc(r.key)}"${r.cur ? ' aria-current="true"' : ''}>` +
+      `<span class="tts">${r.left}</span><span class="nm">${r.bm ? '<span class="bmk" aria-label="ブックマーク">★</span>' : ''}${esc(r.name)}</span><span class="rt">${r.right}</span></button></li>`).join('');
+    if (!n) h = '<li class="fine">見つかりません</li>';
     if (rows.length > LIMIT_ROWS) h += `<li class="fine">ほか${rows.length - LIMIT_ROWS}件。名前で絞り込んでください。</li>`;
     $('pick-list').innerHTML = h;
   }
+
   function choosePick(val) {
-    const { side, i, kind, slot } = pickCtx, G = gd(), t = team(side);
+    const { tid, i, kind, slot } = pickCtx, G = gd(), t = teamById(tid).sets;
     if (kind === 'sp') {
-      const sp = G.byPs.get(val);
-      const old = t[i];
-      const abil = abilIds(sp), legal = moveSet(S.game, sp);
-      const req = sp[SP_REQ].length ? ITEMS[sp[SP_REQ][0]][IT_ID] : '';
-      const set = old ? Object.assign({}, old) : { item: '', moves: [], nature: 'Serious', evs: [0, 0, 0, 0, 0, 0], ivs: [31, 31, 31, 31, 31, 31], tera: '' };
-      set.sp = val;
-      set.note = '';
-      set.ability = old && abil.includes(old.ability) ? old.ability : abil[0];
-      set.moves = (set.moves || []).filter(m => legal.has(m));
-      if (req) set.item = req;
-      if (G.tera && (!old || !set.tera)) set.tera = TYPES[sp[SP_T1]][0];
+      const [ps, stone] = val.split('|'), sp = G.byPs.get(ps), old = t[i];
+      let set;
+      if (old) {
+        const abil = abilIds(sp), legal = moveSet(S.game, sp);
+        set = Object.assign({}, old, { sp: ps, note: '' });
+        set.ability = abil.includes(old.ability) ? old.ability : abil[0];
+        set.moves = (old.moves || []).filter(m => legal.has(m));
+        if (sp[SP_REQ].length) set.item = ITEMS[sp[SP_REQ][0]][IT_ID];
+        if (G.tera && !set.tera) set.tera = TYPES[sp[SP_T1]][0];
+      } else {
+        // 新しく入れるときは、おまかせと同じ考え方で 技・持ち物・能力ポイント などを入れておく
+        const used = new Set(t.map(x => x.item).filter(Boolean));
+        const mg = stone ? (G.megas || []).find(m => ITEMS[m[MG_ITEM]][IT_ID] === stone && m[MG_BASE] === ps) : null;
+        set = makeSet(S.game, formOf(S.game, sp, mg, S.rule === 'doubles'), S.rule === 'doubles', used);
+      }
+      if (stone) set.item = stone;
       t[i] = set;
     } else if (kind === 'item') {
       t[i].item = val;
@@ -492,8 +599,9 @@
       t[i].moves = mv.filter(Boolean).slice(0, 4);
     }
     save();
-    if (pickFromSet) { pickFromSet = false; history.back(); } else location.replace(`#/set/${side}/${i}`);
+    if (pickFromSet) { pickFromSet = false; history.back(); } else location.replace(`#/set/${tid}/${i}`);
   }
+
 
   // ---- おまかせ編成 --------------------------------------------------------
   // ① 6匹で弱点を補い合う（ある弱点を、半減以下で受けられる仲間がいるか）
@@ -780,6 +888,19 @@
     for (let i = 0; i < arr.length; i++) { r -= ws[i]; if (r <= 0) return arr[i]; }
     return arr[arr.length - 1];
   }
+  function makeSet(g, f, dbl, used) {      // 1匹分：型 → 技 → 持ち物 → 性格・能力ポイント
+    const G = GD[g], role = decideRole(g, f, dbl), moves = pickMoves(g, f, role, dbl);
+    const item = pickItem(g, f, role, moves, used, dbl);
+    if (item) used.add(item);
+    const ivs = [31, 31, 31, 31, 31, 31];
+    if (!G.statPoints) {                     // SV：トリックルーム役はすばやさ0、物理技を使わないなら こうげき0
+      if (moves.includes('trickroom')) ivs[5] = 0;
+      if (!moves.some(id => mById.get(id)[MV_CAT] === 1 || id === 'foulplay')) ivs[1] = 0;
+    }
+    const main = moves.map(id => mById.get(id)).filter(m => m[MV_CAT]).sort((x, y) => movePower(f, y, dbl) - movePower(f, x, dbl))[0];
+    return { sp: f.sp[SP_PS], item, ability: f.baseAbility, moves, nature: natureOf(role, f, moves), evs: spreadOf(g, role, f), ivs,
+      tera: G.tera ? TYPES[main ? main[MV_TYPE] : f.t1][0] : '', note: roleLabel(role, f) };
+  }
   function availableModes(g) {             // そのルールで起こせる天候・フィールド
     const G = GD[g], out = new Set();
     for (const sp of G.species) {
@@ -824,20 +945,9 @@
       if (sc > bestS) { bestS = sc; best = team; }
     }
     const used = new Set();
-    return best.map(f => {
-      const role = decideRole(g, f, dbl), moves = pickMoves(g, f, role, dbl);
-      const item = pickItem(g, f, role, moves, used, dbl);
-      if (item) used.add(item);
-      const ivs = [31, 31, 31, 31, 31, 31];
-      if (!G.statPoints) {                     // SV：トリックルーム役はすばやさ0、物理技を使わないなら こうげき0
-        if (moves.includes('trickroom')) ivs[5] = 0;
-        if (!moves.some(id => mById.get(id)[MV_CAT] === 1 || id === 'foulplay')) ivs[1] = 0;
-      }
-      const main = moves.map(id => mById.get(id)).filter(m => m[MV_CAT]).sort((a, b) => movePower(f, b, dbl) - movePower(f, a, dbl))[0];
-      return { sp: f.sp[SP_PS], item, ability: f.baseAbility, moves, nature: natureOf(role, f, moves), evs: spreadOf(g, role, f), ivs,
-        tera: G.tera ? TYPES[main ? main[MV_TYPE] : f.t1][0] : '', note: roleLabel(role, f) };
-    });
+    return best.map(f => makeSet(g, f, dbl, used));
   }
+
   function teamForms(t, g) {              // 表示用：メガストーンを持つポケモンはメガシンカ後の姿で見る
     const G = GD[g];
     return t.map(s => {
@@ -850,10 +960,175 @@
     for (let i = 0; i < fs.length; i++) for (const k in MODES) if (MODES[k].ab.includes(fs[i].ability)) return { mode: k, name: GD[g].byPs.get(t[i].sp)[SP_DISP] };
     return null;
   }
-  function makeAuto(side) {
-    S.teams[key()][side] = autoTeam(S.game, S.rule);
-    save();
+  function renderTeams() {
+    const groups = [['ch', 'singles'], ['ch', 'doubles'], ['sv', 'singles'], ['sv', 'doubles']];
+    let h = '<header class="masthead"><h1>チーム</h1><p class="sub">チームはいくつでも作れます。ルール（ゲームと形式）ごとに保存します。</p></header>' +
+      '<div class="card"><div class="field"><span class="flab" id="lab-nt">新しいチームのルール</span><span class="sel"><select id="nt-rule" aria-labelledby="lab-nt">' +
+      groups.map(([g, r]) => `<option value="${g}_${r}"${g === S.game && r === S.rule ? ' selected' : ''}>${ruleLabel(g, r)}</option>`).join('') + '</select></span></div>' +
+      '<div class="acts"><button type="button" class="btn ink" data-newteam="auto">おまかせで作る</button><button type="button" class="btn" data-newteam="sample">サンプルから</button>' +
+      '<button type="button" class="btn" data-newteam="empty">空のチーム</button></div>' +
+      '<p class="fine">図鑑の各ポケモンの画面にある「チームに追加」からも、チームにポケモンを入れられます。</p></div>';
+    for (const [g, r] of groups) {
+      const list = teamsFor(g, r);
+      if (!list.length) continue;
+      h += `<h2 class="sec">${ruleLabel(g, r)}</h2>` + list.map(t => `<div class="card team"><h3>${esc(t.name)}<span class="n">${t.sets.length}/6</span></h3>` +
+        chips(t.sets, g) + teamInfo(t.sets, g) + `<div class="acts"><a class="btn" href="#/team/${t.id}">編集する</a>` +
+        `<button type="button" class="btn" data-useteam="${t.id}">このチームで対戦</button><button type="button" class="btn" data-simteam="${t.id}">連戦する</button></div></div>`).join('');
+    }
+    V.teams.innerHTML = h;
   }
+  function teamProblems(sets, g, r) {       // 連戦の前の確認（対戦画面と同じ決まり）
+    const f = D.games[g].formats[r], G = GD[g], lim = LIMIT(g), out = [];
+    if (sets.length < f.pick) out.push(`${f.pick}匹以上必要です（いま${sets.length}匹）`);
+    const nums = new Set(), items = new Set();
+    for (const x of sets) {
+      const sp = G.byPs.get(x.sp);
+      if (nums.has(sp[SP_NUM])) out.push('同じポケモンがいます');
+      nums.add(sp[SP_NUM]);
+      if (x.item) { if (items.has(x.item)) out.push(`${jaItem(x.item)}が重なっています`); items.add(x.item); }
+      if (!x.moves.length) out.push(`${sp[SP_DISP]}に技がありません`);
+      if (x.evs.reduce((p, q) => p + q, 0) > lim.total) out.push(`${sp[SP_DISP]}の${G.statPoints ? '能力ポイント' : '努力値'}が多すぎます`);
+    }
+    if (sets.filter(x => G.byPs.get(x.sp)[SP_RESTR]).length > G.restrictedLimit) out.push(`禁止級の伝説のポケモンは${G.restrictedLimit}匹までです`);
+    return [...new Set(out)];
+  }
+  let SIM = null;
+  function renderSim() {
+    if (!teamById(S.simTeam)) S.simTeam = selOf(S.game, S.rule).you;
+    const t = teamById(S.simTeam), opps = teamsFor(t.game, t.rule).filter(x => x.id !== t.id);
+    const running = SIM && SIM.running;
+    V.sim.innerHTML = '<header class="masthead"><h1>連戦シミュレーション</h1><p class="sub">CPU どうしで何回も対戦させて、勝率と、選出したポケモンごとの戦績を出します。</p></header>' +
+      `<div class="card"><div class="field"><span class="flab">あなたのチーム</span><span class="sel"><select id="sim-team"${running ? ' disabled' : ''}>` +
+      S.teams.map(x => `<option value="${x.id}"${x.id === t.id ? ' selected' : ''}>${esc(x.name)}（${ruleLabel(x.game, x.rule)}）</option>`).join('') + '</select></span></div>' +
+      `<div class="field"><span class="flab">相手</span><span class="sel"><select id="sim-opp"${running ? ' disabled' : ''}><option value="auto">おまかせ（1戦ごとに新しく作る）</option>` +
+      opps.map(x => `<option value="${x.id}"${SIM && SIM.opp === x.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('') + '</select></span></div>' +
+      `<div class="field"><span class="flab" id="lab-n">回数</span><div class="seg" role="group" aria-labelledby="lab-n" id="sim-n">${[10, 30, 100].map(n =>
+        `<button type="button" data-simn="${n}" aria-pressed="${n === S.simN}"${running ? ' disabled' : ''}>${n}回</button>`).join('')}</div></div>` +
+      `<p class="problems" id="sim-prob" hidden></p><button type="button" class="primary" id="sim-go">${running ? '止める' : '開始'}</button>` +
+      '<p class="fine">選出・技・交代は、あなたのチームも相手も CPU が選びます。100回で1〜2分ほどかかります。</p></div>' +
+      `<div id="sim-out">${SIM && SIM.agg ? simHTML(SIM.agg) : ''}</div>`;
+  }
+  function newAgg(t, opp) {
+    const mine = {};
+    for (const x of t.sets) mine[GD[t.game].byPs.get(x.sp)[SP_BASE]] = { disp: GD[t.game].byPs.get(x.sp)[SP_DISP], pick: 0, lead: 0, win: 0, ko: 0, fnt: 0, dmg: 0 };
+    return { team: t.name, game: t.game, rule: t.rule, opp, n: 0, total: 0, win: 0, lose: 0, tie: 0, turns: 0, mine, foe: {} };
+  }
+  function addResult(agg, r) {
+    agg.n++;
+    if (r.winner === 'p1') agg.win++; else if (r.winner === 'p2') agg.lose++; else agg.tie++;
+    agg.turns += r.turns;
+    const lead = agg.rule === 'doubles' ? 2 : 1;
+    r.picks.p1.forEach((name, i) => {
+      const m = agg.mine[name];
+      if (!m) return;
+      m.pick++; if (i < lead) m.lead++; if (r.winner === 'p1') m.win++;
+      m.ko += r.kos['p1:' + name] || 0; m.fnt += r.fnt['p1:' + name] ? 1 : 0; m.dmg += r.dmg['p1:' + name] || 0;
+    });
+    r.picks.p2.forEach(name => {
+      const d = r.disp[name] || name, o = agg.foe[d] || (agg.foe[d] = { face: 0, ko: 0, fnt: 0, win: 0 });
+      o.face++; o.ko += r.kos['p2:' + name] || 0; o.fnt += r.fnt['p2:' + name] ? 1 : 0; if (r.winner === 'p2') o.win++;
+    });
+  }
+  function simHTML(a) {
+    const pc = (x, y) => (y ? Math.round((100 * x) / y) + '%' : '—');
+    const n = a.n, wr = n ? a.win / n : 0, err = n ? Math.round(196 * Math.sqrt((wr * (1 - wr)) / n)) : 0;
+    let h = `<div class="card simres"><div class="big">勝率 ${pc(a.win, n)}</div><div class="wbar"><i style="width:${wr * 100}%"></i></div>` +
+      `<p class="fine">${a.win}勝 ${a.lose}敗${a.tie ? ` ${a.tie}分` : ''}（${n}${a.total && n < a.total ? ` / ${a.total}` : ''}戦）・平均 ${n ? (a.turns / n).toFixed(1) : '—'}ターン` +
+      `${n >= 10 ? `・誤差の目安 ±${err}%` : ''}</p>` +
+      '<h3>あなたのポケモン</h3><div class="scroll-x"><table class="stab"><thead><tr><th class="l">ポケモン</th><th>選出</th><th>先発</th><th>勝率</th><th>撃破</th><th>ひんし</th></tr></thead><tbody>' +
+      Object.values(a.mine).sort((x, y) => y.pick - x.pick).map(m => `<tr><td class="l">${esc(m.disp)}</td><td>${pc(m.pick, n)}</td><td>${pc(m.lead, n)}</td>` +
+        `<td>${pc(m.win, m.pick)}</td><td>${m.pick ? (m.ko / m.pick).toFixed(2) : '—'}</td><td>${pc(m.fnt, m.pick)}</td></tr>`).join('') + '</tbody></table></div>';
+    const foes = Object.entries(a.foe).sort((x, y) => y[1].ko - x[1].ko || y[1].face - x[1].face).slice(0, 12);
+    if (foes.length) {
+      h += `<h3>${a.opp === 'auto' ? '手ごわかった相手（あなたのポケモンを倒した数の順）' : '相手のポケモン'}</h3><div class="scroll-x"><table class="stab"><thead><tr><th class="l">ポケモン</th><th>対面</th><th>倒された</th><th>勝率</th><th>撃破</th></tr></thead><tbody>` +
+        foes.map(([d, o]) => `<tr><td class="l">${esc(d)}</td><td>${o.face}回</td><td>${o.ko}</td><td>${pc(o.win, o.face)}</td><td>${pc(o.fnt, o.face)}</td></tr>`).join('') + '</tbody></table></div>';
+    }
+    return h + '<p class="fine">あなたのポケモン：「選出」「先発」は全体の対戦に対する割合、「勝率」は選出したときの勝率、「撃破」は1戦あたりに倒した数、' +
+      '「ひんし」は選出したときに倒された割合です。相手のポケモン：「対面」は選出された回数、「倒された」はあなたのポケモンが倒された数、' +
+      '「勝率」は選出された対戦で相手が勝った割合、「撃破」はあなたが倒した割合です。撃破は、最後にダメージを与えたポケモンに数えます。</p></div>';
+  }
+  async function runSim() {
+    const t = teamById($('sim-team').value), opp = $('sim-opp').value, n = S.simN;
+    const probs = teamProblems(t.sets, t.game, t.rule).concat(opp !== 'auto' ? teamProblems(teamById(opp).sets, t.game, t.rule).map(x => '相手：' + x) : []);
+    if (probs.length) { $('sim-prob').hidden = false; $('sim-prob').innerHTML = probs.map(esc).join('<br>'); return; }
+    SIM = { running: true, cancel: false, opp, agg: newAgg(t, opp) };
+    SIM.agg.total = n;
+    renderSim();
+    for (let i = 0; i < n && !SIM.cancel; i++) {
+      const theirs = opp === 'auto' ? autoTeam(t.game, t.rule) : teamById(opp).sets;
+      const r = await simOne(t.game, t.rule, t.sets, theirs);
+      addResult(SIM.agg, r);
+      const out = $('sim-out');
+      if (out) out.innerHTML = `<p class="fine">${i + 1} / ${n} 戦目</p>` + simHTML(SIM.agg);
+    }
+    SIM.running = false;
+    B = null;
+    if (location.hash === '#/sim') renderSim();
+  }
+  // 画面に出さずに CPU どうしで1戦する（対戦画面と同じしくみを使い、表示だけ省く）
+  function simOne(g, r, mine, theirs) {
+    return new Promise(resolve => {
+      const f = D.games[g].formats[r], stream = new PSEngine.BattleStream(), ps = PSEngine.getPlayerStreams(stream);
+      const sess = { headless: true, f, game: g, cpu: { p1: true, p2: true }, stream, ps, req: { p1: null, p2: null }, done: { p1: false, p2: false },
+        err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0 }, over: false, winner: '', lastWeather: '',
+        unknown: new Set(), errors: [], ui: null, text: [], teams: { p1: mine, p2: theirs },
+        st: { last: null, hitBy: {}, dmg: {}, kos: {}, fnt: {}, picks: { p1: [], p2: [] }, disp: {}, turns: 0 } };
+      sess.finish = () => {
+        if (sess.done2) return;
+        sess.done2 = true; sess.over = true;
+        resolve({ winner: sess.winner === 'あなた' ? 'p1' : sess.winner === '相手' ? 'p2' : '', turns: sess.st.turns, picks: sess.st.picks,
+          disp: sess.st.disp, kos: sess.st.kos, fnt: sess.st.fnt, dmg: sess.st.dmg });
+      };
+      B = sess;
+      pump(sess, ps.omniscient, onLog);
+      pump(sess, ps.p1, c => onSide(sess, 'p1', c));
+      pump(sess, ps.p2, c => onSide(sess, 'p2', c));
+      const t1 = PSEngine.Teams.pack(mine.map(x => toPS(x, g))), t2 = PSEngine.Teams.pack(theirs.map(x => toPS(x, g)));
+      ps.omniscient.write(`>start ${JSON.stringify({ formatid: f.id })}\n>player p1 ${JSON.stringify({ name: 'あなた', team: t1 })}\n` +
+        `>player p2 ${JSON.stringify({ name: '相手', team: t2 })}`);
+      setTimeout(() => { if (!sess.done2) { sess.errors.push('時間切れ'); sess.finish(); } }, 60000);
+    });
+  }
+  function simLine(cmd, a, kw) {            // 連戦用：戦績に必要なことだけをログから拾う
+    const st = B.st;
+    switch (cmd) {
+      case 'start': {
+        const b = B.stream.battle, G = GD[B.game];
+        st.picks = { p1: b.p1.pokemon.map(p => p.name), p2: b.p2.pokemon.map(p => p.name) };
+        for (const p of b.p2.pokemon) st.disp[p.name] = (G.byPs.get(p.species.name) || [])[SP_DISP] || p.name;
+        break;
+      }
+      case 'turn': st.turns = +a[0]; break;
+      case 'switch': case 'drag': case 'replace': {
+        const p = parseIdent(a[0]), h = parseHP(a[2]);
+        if (p && h) B.hp.set(p.key, { cur: h.cur, max: h.max || (B.hp.get(p.key) || {}).max || h.cur });
+        break;
+      }
+      case 'move': st.last = parseIdent(a[0]); break;
+      case '-damage': case '-heal': case '-sethp': {
+        const p = parseIdent(a[0]), h = parseHP(a[1]);
+        if (!p || !h) break;
+        const prev = B.hp.get(p.key) || { cur: h.cur, max: h.max }, max = h.max || prev.max;
+        B.hp.set(p.key, { cur: h.cur, max });
+        if (cmd === '-damage' && !kw.from && st.last && st.last.side !== p.side) {
+          st.dmg[st.last.key] = (st.dmg[st.last.key] || 0) + Math.max(0, prev.cur - h.cur) / (max || 1);
+          st.hitBy[p.key] = st.last.key;
+        }
+        break;
+      }
+      case 'faint': {
+        const p = parseIdent(a[0]);
+        if (!p) break;
+        st.fnt[p.key] = 1;
+        const k = st.hitBy[p.key];
+        if (k) st.kos[k] = (st.kos[k] || 0) + 1;
+        break;
+      }
+      case 'win': B.winner = a[0]; B.finish(); break;
+      case 'tie': B.winner = ''; B.finish(); break;
+    }
+  }
+
 
   // ---- バトル ------------------------------------------------------------
   let B = null;
@@ -865,10 +1140,12 @@
   }
   function startBattle() {
     if (problems().length) return;
+    const you = team('you').slice(), opp = team('opp').slice();
+    if (selOf(S.game, S.rule).opp === 'auto') S.autoUsed[key()] = true;   // 次に設定画面を開くと、新しい おまかせ を作る
     const f = fmtInfo(), stream = new PSEngine.BattleStream(), ps = PSEngine.getPlayerStreams(stream);
     const sess = { f, game: S.game, cpu: { p1: AUTOTEST, p2: S.cpu || AUTOTEST }, stream, ps, req: { p1: null, p2: null }, done: { p1: false, p2: false },
       err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0 }, over: false, winner: '', lastWeather: '', unknown: new Set(), errors: [], ui: null, text: [],
-      teams: { p1: team('you').slice(), p2: team('opp').slice() } };
+      teams: { p1: you, p2: opp } };
     B = sess;
     V.battle.innerHTML = `<div class="bar"><button type="button" class="back" data-act="quit">${BACK_SVG}やめる</button>` +
       `<span class="ttl">${S.game === 'ch' ? 'チャンピオンズ' : 'SV'}・${f.gameType === 'doubles' ? 'ダブル' : 'シングル'}</span><span class="sp" id="b-turn"></span></div>` +
@@ -877,8 +1154,8 @@
     pump(sess, ps.omniscient, onLog);
     pump(sess, ps.p1, c => onSide(sess, 'p1', c));
     pump(sess, ps.p2, c => onSide(sess, 'p2', c));
-    const t1 = PSEngine.Teams.pack(team('you').map(s => toPS(s, S.game)));
-    const t2 = PSEngine.Teams.pack(team('opp').map(s => toPS(s, S.game)));
+    const t1 = PSEngine.Teams.pack(you.map(x => toPS(x, S.game)));
+    const t2 = PSEngine.Teams.pack(opp.map(x => toPS(x, S.game)));
     ps.omniscient.write(`>start ${JSON.stringify({ formatid: f.id })}\n>player p1 ${JSON.stringify({ name: 'あなた', team: t1 })}\n` +
       `>player p2 ${JSON.stringify({ name: '相手', team: t2 })}`);
   }
@@ -1189,11 +1466,11 @@
         const m = /^\[(\w+)\]\s?(.*)$/.exec(x);
         if (m) kw[m[1]] = m[2]; else args.push(x);
       }
+      if (B.headless) { simLine(cmd, args, kw); continue; }
       try { for (const it of fmtLine(cmd, args, kw)) items.push(it); }
       catch (e) { B.errors.push(String(e)); items.push({ cls: 'err', html: esc(line) }); }
     }
-    appendLog(items);
-    renderField();
+    if (!B.headless) { appendLog(items); renderField(); }
     scheduleCmd();
   }
   function appendLog(items) {
@@ -1222,6 +1499,7 @@
   }
   const cond = (name, dur) => `<span class="cond">${esc(name)}${dur ? ` 残り${dur}` : ''}</span>`;
   function renderField() {
+    if (B && B.headless) return;
     const el = $('b-field'), b = B && B.stream.battle;
     if (!el || !b || !b.p1 || !b.p2) return;
     $('b-turn').textContent = b.turn ? `ターン ${b.turn}` : '';
@@ -1244,8 +1522,19 @@
   // ---- コマンド入力 ---------------------------------------------------------
   const whoLabel = side => (B.cpu.p2 ? '' : `<span class="who">${side === 'p1' ? 'あなた（p1）' : '相手（p2）'}の番</span>`);
   function renderCmd() {
+    if (!B) return;
+    if (B.headless) {                        // 連戦：CPU の選択だけを進める
+      for (const side of ['p1', 'p2']) {
+        if (!B.over && actionable(B.req[side]) && !B.done[side]) {
+          const req = B.req[side], had = B.err[side], sess = B;
+          B.done[side] = true;
+          setTimeout(() => { if (B === sess && !sess.over) sess.ps[side].write(had ? 'default' : cpuChoice(side, req)); }, 0);
+        }
+      }
+      return;
+    }
     const el = $('b-cmd');
-    if (!B || !el) return;
+    if (!el) return;
     if (B.over) {
       el.innerHTML = `<div class="result"><div class="big">${B.winner === 'あなた' ? 'あなたの勝ち！' : B.winner ? '相手の勝ち…' : '引き分け'}</div>` +
         '<div class="opts" style="justify-content:center"><button type="button" class="btn ink" data-act="again">同じチームでもう一度</button>' +
@@ -1364,7 +1653,7 @@
     if (!t || t.disabled) return;
     const ui = B.ui, act = t.dataset.act;
     if (act === 'again') { startBattle(); return; }
-    if (act === 'setup') { B = null; location.hash = '#/'; return; }
+    if (act === 'setup') { B = null; location.hash = '#/b'; return; }
     if (act === 'copylog') {
       const text = B.text.join('\n');
       const note = $('copy-note');
@@ -1579,8 +1868,17 @@
   function cpuChoice(side, req) {
     try {
       if (req.teamPreview) {
-        const idx = req.side.pokemon.map((p, k) => k + 1), n = B.f.pick;
-        for (let k = idx.length - 1; k > 0; k--) { const r = Math.floor(Math.random() * (k + 1)); [idx[k], idx[r]] = [idx[r], idx[k]]; }
+        const n = B.f.pick, G = GD[B.game], M = effMatrix(), other = B.teams[side === 'p1' ? 'p2' : 'p1'];
+        const typesOf2 = sp => [sp[SP_T1], sp[SP_T2]].filter(t => t >= 0);
+        const oppT = other.map(x => G.byPs.get(x.sp)).filter(Boolean).map(typesOf2);
+        const best = (atk, def) => Math.max(...atk.map(t => Math.min(2, def.reduce((m, d) => m * M[t][d], 1))));
+        const idx = req.side.pokemon.map((p, k) => {
+          const nm = p.details.split(',')[0], sp = G.byPs.get(nm) || G.byId.get(toID(nm));
+          const my = sp ? typesOf2(sp) : [0];
+          let v = 0;
+          for (const ot of oppT) v += best(my, ot) - best(ot, my);       // こちらが抜群を取れるか − 抜群を取られるか
+          return { k: k + 1, v: v / Math.max(1, oppT.length) + (sp ? sp[SP_ST].reduce((x, y) => x + y, 0) / 600 : 0) + Math.random() * 0.6 };
+        }).sort((x, y) => y.v - x.v).map(x => x.k);
         // メガストーンを持つポケモンは選出に1匹以上・2匹まで（メガシンカは1回の対戦で1匹だけ）
         const isMega = k => { const p = req.side.pokemon[k - 1], it = iById.get(p.item); return !!(it && it[IT_MEGA] && it[IT_MEGA] === p.details.split(',')[0]); };
         const inPick = () => idx.slice(0, n).filter(isMega).length;
@@ -1647,18 +1945,47 @@
     $('seg-game').addEventListener('click', e => { const b = e.target.closest('[data-game]'); if (b) { S.game = b.dataset.game; save(); renderSetup(); } });
     $('seg-rule').addEventListener('click', e => { const b = e.target.closest('[data-rule]'); if (b) { S.rule = b.dataset.rule; save(); renderSetup(); } });
     $('seg-cpu').addEventListener('click', e => { const b = e.target.closest('[data-cpu]'); if (b) { S.cpu = b.dataset.cpu === '1'; save(); renderSetup(); } });
-    $('start').addEventListener('click', () => { if (S.autoOpp) makeAuto('opp'); startBattle(); });
-    $('teams').addEventListener('change', e => { if (e.target.id === 'auto-opp') { S.autoOpp = e.target.checked; save(); } });
-    document.addEventListener('click', e => {
-      const s = e.target.closest('[data-sample]');
-      if (s) { S.teams[key()][s.dataset.sample] = sampleTeam(key()); save(); route(); return; }
-      const au = e.target.closest('[data-auto]');
-      if (au) { makeAuto(au.dataset.auto); route(); return; }
-      const c = e.target.closest('[data-copyto]');
-      if (c) {
-        const from = c.dataset.copyto === 'opp' ? 'you' : 'opp';
-        S.teams[key()][c.dataset.copyto] = team(from).map(x => JSON.parse(JSON.stringify(x)));
-        save(); c.textContent = 'コピーしました'; return;
+    $('start').addEventListener('click', startBattle);
+    $('teams').addEventListener('change', e => {
+      const p = e.target.closest('[data-pickteam]');
+      if (!p) return;
+      selOf(S.game, S.rule)[p.dataset.pickteam] = p.value;
+      save(); renderSetup();
+    });
+    V.team.addEventListener('input', e => {
+      if (e.target.id !== 't-name') return;
+      const tm = teamById((location.hash.match(/^#\/team\/([\w-]+)/) || [])[1]);
+      if (tm) { tm.name = e.target.value.trim().slice(0, 40) || 'チーム'; save(); }
+    });
+    V.sim.addEventListener('change', e => { if (e.target.id === 'sim-team') { S.simTeam = e.target.value; save(); renderSim(); } });
+    ROOT.addEventListener('click', e => {
+      const ss = e.target.closest('[data-simn]');
+      if (ss && !ss.disabled) { S.simN = +ss.dataset.simn; save(); renderSim(); return; }
+      if (e.target.closest('#sim-go')) { if (SIM && SIM.running) SIM.cancel = true; else runSim(); return; }
+      if (e.target.closest('[data-reroll]')) { S.autoUsed[key()] = true; save(); renderSetup(); return; }
+      if (e.target.closest('[data-saveauto]')) {
+        const t = addTeam(S.game, S.rule, uniqueName(`おまかせ（${ruleLabel(S.game, S.rule)}）`), JSON.parse(JSON.stringify(team('opp'))));
+        selOf(S.game, S.rule).opp = t.id; save(); renderSetup(); return;
+      }
+      const nt = e.target.closest('[data-newteam]');
+      if (nt) {
+        const [g, r] = $('nt-rule').value.split('_'), kind = nt.dataset.newteam;
+        const sets = kind === 'auto' ? autoTeam(g, r) : kind === 'sample' ? sampleTeam(g + '_' + r) : [];
+        const t = addTeam(g, r, uniqueName(`${kind === 'auto' ? 'おまかせ' : kind === 'sample' ? 'サンプル' : '新しいチーム'}（${ruleLabel(g, r)}）`), sets);
+        save(); location.hash = `#/team/${t.id}`; return;
+      }
+      const ut = e.target.closest('[data-useteam]');
+      if (ut) { const t = teamById(ut.dataset.useteam); S.game = t.game; S.rule = t.rule; selOf(t.game, t.rule).you = t.id; save(); location.hash = '#/b'; return; }
+      const sm = e.target.closest('[data-simteam]');
+      if (sm) { S.simTeam = sm.dataset.simteam; save(); location.hash = '#/sim'; return; }
+      const dp = e.target.closest('[data-dupteam]');
+      if (dp) { const t = teamById(dp.dataset.dupteam), c = addTeam(t.game, t.rule, uniqueName(t.name + ' のコピー'), JSON.parse(JSON.stringify(t.sets))); save(); location.hash = `#/team/${c.id}`; return; }
+      const at = e.target.closest('[data-autoteam]');
+      if (at) { const t = teamById(at.dataset.autoteam); t.sets = autoTeam(t.game, t.rule); save(); renderTeam(t.id); return; }
+      const dl = e.target.closest('[data-delteam]');
+      if (dl) {
+        if (dl.dataset.sure !== '1') { dl.dataset.sure = '1'; dl.textContent = '本当に削除する'; return; }
+        S.teams = S.teams.filter(t => t.id !== dl.dataset.delteam); save(); location.hash = '#/teams'; return;
       }
       const pa = e.target.closest('[data-paste]');
       if (pa) { pasteImport(pa.dataset.paste); return; }
@@ -1667,13 +1994,13 @@
       const im = e.target.closest('[data-import]');
       if (im) { importText(im.dataset.import); return; }
       const rm = e.target.closest('[data-remove]');
-      if (rm) { const [side, i] = rm.dataset.remove.split(':'); team(side).splice(+i, 1); save(); location.hash = `#/team/${side}`; return; }
+      if (rm) { const [tid, i] = rm.dataset.remove.split(':'); teamById(tid).sets.splice(+i, 1); save(); location.hash = `#/team/${tid}`; return; }
       const ch = e.target.closest('[data-choose]');
       if (ch && pickCtx) { choosePick(ch.dataset.choose); return; }
       const q = e.target.closest('[data-act="quit"]');
       if (q) {
         if (B && !B.over && q.dataset.sure !== '1') { q.dataset.sure = '1'; q.lastChild.textContent = '本当にやめる'; return; }
-        B = null; location.hash = '#/'; return;
+        B = null; location.hash = '#/b'; return;
       }
       if (e.target.closest('#b-cmd')) onCmdClick(e);
     });
@@ -1719,7 +2046,7 @@
     window.addEventListener('hashchange', route);
   }
   async function init() {
-    for (const k of ['setup', 'team', 'set', 'pick', 'battle']) V[k] = $('v-' + k);
+    for (const k of ['setup', 'teams', 'team', 'set', 'pick', 'battle', 'sim']) V[k] = $('v-' + k);
     try { buildIndex(await loadData()); } catch (err) {
       $('teams').innerHTML = '<p class="problems">データを展開できませんでした。ブラウザを最新版に更新してください。</p>';
       console.error(err);
@@ -1731,7 +2058,26 @@
     $('fmt-names').textContent = ['ch', 'sv'].map(g => Object.values(D.games[g].formats).map(f => f.name).join('／')).join('／');
     wire();
     route();
-    document.documentElement.setAttribute('data-ready', '1');
+    // 図鑑から使う窓口（同じページにまとめたとき）：チームの一覧・ポケモンを入れる・新しいチームを作る
+    window.BT = {
+      teams: () => S.teams.map(t => ({ id: t.id, name: t.name, game: t.game, rule: t.rule, label: ruleLabel(t.game, t.rule), count: t.sets.length })),
+      usable: pid => ['ch', 'sv'].filter(g => !!findByPid(g, pid)),
+      ruleLabel,
+      add(tid, pid) {
+        const t = teamById(tid);
+        if (!t) return { ok: false, msg: 'チームが見つかりません' };
+        const hit = findByPid(t.game, pid), G = GD[t.game];
+        if (!hit) return { ok: false, msg: `${ruleLabel(t.game, t.rule)}では使えないポケモンです` };
+        if (t.sets.length >= 6) return { ok: false, msg: `「${t.name}」にはもう6匹います` };
+        if (t.sets.some(x => G.byPs.get(x.sp)[SP_NUM] === hit.sp[SP_NUM])) return { ok: false, msg: `「${t.name}」にはもう${hit.sp[SP_BASE]}がいます` };
+        const used = new Set(t.sets.map(x => x.item).filter(Boolean)), dbl = t.rule === 'doubles';
+        t.sets.push(makeSet(t.game, formOf(t.game, hit.sp, hit.mega, dbl), dbl, used));
+        save();
+        return { ok: true, id: t.id, msg: `「${t.name}」に${hit.mega ? hit.mega[MG_DISP] : hit.sp[SP_DISP]}を入れました（${t.sets.length}/6）` };
+      },
+      create(g, r) { const t = addTeam(g, r, uniqueName(`新しいチーム（${ruleLabel(g, r)}）`), []); save(); return t.id; },
+    };
+    document.documentElement.setAttribute('data-bt-ready', '1');
     if (AUTOTEST) {
       window.__bt = {
         start(game, rule) { S.game = game; S.rule = rule; startBattle(); },
@@ -1742,7 +2088,11 @@
           window.__sent = null; B.ps[side].write = c => { window.__sent = c; };
           renderCmd();
         },
-        autoBoth() { S.teams[key()] = { you: autoTeam(S.game, S.rule), opp: autoTeam(S.game, S.rule) }; },
+        autoBoth() {
+          const s = selOf(S.game, S.rule);
+          teamById(s.you).sets = autoTeam(S.game, S.rule);
+          s.opp = 'auto'; S.autoPrev[key()] = autoTeam(S.game, S.rule); S.autoUsed[key()] = false;
+        },
         autoTeamCheck(game, rule) {
           const t = autoTeam(game, rule), G = GD[game], lim = LIMIT(game), fs = teamForms(t, game);
           const problems = [];
@@ -1805,7 +2155,9 @@
             }
             return out;
           };
-          S.teams[key()] = { you: make(), opp: make() };
+          const s = selOf(S.game, S.rule);
+          teamById(s.you).sets = make();
+          s.opp = 'auto'; S.autoPrev[key()] = make(); S.autoUsed[key()] = false;
         },
         state: () => (B ? { cpu: B.cpuStats, over: B.over, winner: B.winner, turn: B.stream.battle ? B.stream.battle.turn : 0, unknown: [...B.unknown], errors: B.errors.slice(), lines: B.text.length } : null),
       };

@@ -1,8 +1,13 @@
 # ポケモンデータ検索とバトルシミュレーター
 
-- **図鑑**（`index.html`）：種族値・技・特性を検索でき、実数値も計算できる1枚の HTML（データは PokeAPI）
-- **バトルシミュレーター**（`battle.html`）：ランクバトルのルールで対戦できる1枚の HTML（対戦の計算は Pokémon Showdown）
-- **データベース**（`pokedex.sqlite`）：図鑑のデータを SQLite にしたもの
+1枚の HTML（`index.html`）に、次の4つの画面をまとめています。上のタブで切り替えます。
+
+- **図鑑**：種族値・技・特性を検索し、実数値を計算できます（データは PokeAPI）。ポケモンをブックマークしたり、「チームに追加」でチームに入れたりできます
+- **チーム**：チームをいくつでも作れます（ルールごと）。おまかせ・サンプル・空から作り、名前の変更・複製・削除、テキストでの読み込みと書き出しができます
+- **対戦**：ランクバトルのルールで CPU と対戦します（対戦の計算は Pokémon Showdown）。相手は保存したチームか「おまかせ」です
+- **連戦**：自分のチームと おまかせ（または保存したチーム）を CPU どうしで何十回も対戦させ、勝率と、ポケモンごとの選出率・選出したときの勝率・撃破数などを出します
+
+ブックマークとチームはブラウザに保存され、図鑑とバトルで共通です。`pokedex.sqlite` は図鑑のデータを SQLite にしたものです。
 
 GitHub Actions が毎週データを取り直して作り直し、実ブラウザで検証してから GitHub Pages に公開します。
 
@@ -12,6 +17,7 @@ GitHub Actions が毎週データを取り直して作り直し、実ブラウ�
 .github/workflows/update.yml   毎週・手動・push で「取得 → 作る → 検証 → 公開」
 scripts/
   build_all.sh                 図鑑とバトルを一括で作る（手元でも CI でも同じ）
+  build_app.py                 図鑑とバトルを1枚の HTML（build/app.html）にまとめる。CSS は #pd・#bt の中だけに効くように書き換える
   verify_all.sh                実ブラウザでの検証（図鑑 → バトル）
   assemble_site.py             公開用の site/ をまとめ、使ったデータの版を DATA_VERSIONS.json に書く
 etl/                           図鑑：PokeAPI の CSV 取得・SQLite と HTML の生成・検証
@@ -76,7 +82,8 @@ PS_DIR=../pokemon-showdown scripts/verify_all.sh
 python scripts/assemble_site.py        # → site/
 ```
 
-- 図鑑とバトルのリンク先は、ビルド時の環境変数 `LINK_BATTLE`（既定 `battle.html`）と `LINK_POKEDEX`（既定 `index.html`）で変えられます。
+- 画面の切り替えはハッシュで行います（図鑑 `#/`・`#/p/6`、チーム `#/teams`・`#/team/<ID>`、対戦 `#/b`・`#/battle`、連戦 `#/sim`）。
+  以前の `battle.html` は、まとめたページの対戦画面へ案内するだけのページになっています。
 - 図鑑の埋め込みデータは列名を捨てた配列です。添字の対応は `etl/build_data.py` の先頭に書いてあります。
   変えるときは `src/app.js` と `etl/verify.py` も同時に直してください。
 - 同じデータから作り直すと、HTML はバイト単位で同じものになります。

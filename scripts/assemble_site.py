@@ -6,8 +6,12 @@ ROOT = Path(__file__).resolve().parent.parent
 SITE = ROOT / "site"
 shutil.rmtree(SITE, ignore_errors=True)
 SITE.mkdir()
-shutil.copy(ROOT / "build/pokedex.html", SITE / "index.html")
-shutil.copy(ROOT / "battle/build/battle.html", SITE / "battle.html")
+shutil.copy(ROOT / "build/app.html", SITE / "index.html")
+# 以前の battle.html へのリンクは、まとめたページの対戦画面へ案内する
+(SITE / "battle.html").write_text(
+    '<!doctype html><html lang="ja"><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=index.html#/b">'
+    '<title>バトルシミュレーター</title><p>バトルシミュレーターは図鑑と同じページにまとめました。'
+    '<a href="index.html#/b">こちら</a>から開いてください。</p></html>\n', encoding="utf-8")
 shutil.copy(ROOT / "build/pokedex.sqlite", SITE / "pokedex.sqlite")
 (SITE / ".nojekyll").write_text("")
 ps = json.loads((ROOT / "battle/ps-data.json").read_text())

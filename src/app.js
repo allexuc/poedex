@@ -166,13 +166,20 @@
   // ---- 状態 ------------------------------------------------------------
   const st = {
     tab: 'p', game: 'all', q: '', more: false,
-    p: { types: [], gen: 0, sort: 'dex', cat: 'all', forms: true, move: 0, ability: 0 },
+    p: { types: [], gen: 0, sort: 'dex', cat: 'all', forms: true, move: 0, ability: 0, bm: false },
     m: { types: [], gen: 0, sort: 'id', cls: 0 },
     a: { gen: 0, sort: 'id' },
   };
   let detailGame = null;
   let view = 'list', listY = 0;
   const navStack = [];
+  // バトル側の画面（1つのページにまとめたとき）。図鑑はこれらのハッシュでは何もしない
+  const BT_ROUTE = /^#\/(b|teams|team|set|battle|sim)(\/|$)/;
+  const inBattle = () => BT_ROUTE.test(location.hash);
+  // ブックマーク：pokemon_id の配列。バトルのチーム編成でポケモンを選ぶときにも使う
+  let BM = new Set(), bmDirty = false;
+  function loadBM() { try { const a = JSON.parse(store.get('pd.bookmarks') || '[]'); BM = new Set(Array.isArray(a) ? a.filter(Number.isInteger) : []); } catch (e) { BM = new Set(); } }
+  function toggleBM(pid) { if (BM.has(pid)) BM.delete(pid); else BM.add(pid); store.set('pd.bookmarks', JSON.stringify([...BM])); }
   const els = {};
 
   // ---- 絞り込み --------------------------------------------------------
@@ -183,6 +190,7 @@
     const out = [];
     for (let i = 0; i < P.length; i++) {
       const p = P[i];
+      if (f.bm && !BM.has(p[P_ID])) continue;
       if (!f.forms && (p[P_FLAGS] & F_ALT)) continue;
       if (!inGameP(p, g)) continue;
       if (f.types.length && !f.types.every(t => p[P_T1] === t || p[P_T2] === t)) continue;
@@ -269,7 +277,7 @@
     let stats = '';
     for (let i = 0; i < 6; i++) stats += `<span${i === on ? ' class="on"' : ''}><i>${STAT_KEYS[i]}</i>${p[P_ST + i]}</span>`;
     return `<li class="row"><a href="#/p/${p[P_ID]}"><div class="rb"><div class="l1"><span class="no">${pad(p[P_DEX])}</span>` +
-      `<span class="nm">${esc(p[P_NAME])}</span><span class="tot${s === 'total' ? ' on' : ''}"><small>合計</small>${totals.get(p[P_ID])}</span></div>` +
+      `<span class="nm">${BM.has(p[P_ID]) ? '<span class="bmk" aria-label="ブックマーク">★</span>' : ''}${esc(p[P_NAME])}</span><span class="tot${s === 'total' ? ' on' : ''}"><small>合計</small>${totals.get(p[P_ID])}</span></div>` +
       `<div class="stats">${stats}</div></div>${thumb(p[P_T1], p[P_T2])}</a></li>`;
   }
   function rowM(m) {
@@ -379,7 +387,7 @@
       opts.map(([v, t]) => `<option value="${v}"${String(v) === String(value) ? ' selected' : ''}>${esc(t)}</option>`).join('') +
       '</select></span>';
   }
-  const moreActive = () => !!st.p.move || !!st.p.ability || st.p.cat !== 'all' || !st.p.forms;
+  const moreActive = () => !!st.p.move || !!st.p.ability || st.p.cat !== 'all' || !st.p.forms || st.p.bm;
   const moreLabel = () => '条件を追加' + (moreActive() ? '<span class="dot" role="img" aria-label="設定中"></span>' : '');
 
   function buildTypeGrid() {
@@ -424,7 +432,8 @@
       `<div class="field"><span class="flab">覚える技</span><div class="picker" data-kind="move">${pickerHTML('move')}</div></div>` +
       `<div class="field"><span class="flab">特性</span><div class="picker" data-kind="ability">${pickerHTML('ability')}</div></div>` +
       `<div class="field"><span class="flab">区分</span>${selHTML('f-cat', '区分', st.p.cat, CAT_OPTS)}</div>` +
-      `<label class="check"><input type="checkbox" id="f-forms"${st.p.forms ? ' checked' : ''}>メガシンカやリージョンフォームなど、別の姿も表示する</label>`;
+      `<label class="check"><input type="checkbox" id="f-forms"${st.p.forms ? ' checked' : ''}>メガシンカやリージョンフォームなど、別の姿も表示する</label>` +
+      `<label class="check"><input type="checkbox" id="f-bm"${st.p.bm ? ' checked' : ''}>ブックマークしたポケモンだけ（${BM.size}匹）</label>`;
   }
   function refreshPicker(kind) {
     const box = els.more.querySelector(`.picker[data-kind="${kind}"]`);
@@ -464,7 +473,7 @@
   }
   function resetFilters() {
     st.q = ''; els.q.value = ''; els.qclear.hidden = true;
-    if (st.tab === 'p') Object.assign(st.p, { types: [], gen: 0, cat: 'all', forms: true, move: 0, ability: 0 });
+    if (st.tab === 'p') Object.assign(st.p, { types: [], gen: 0, cat: 'all', forms: true, move: 0, ability: 0, bm: false });
     else if (st.tab === 'm') Object.assign(st.m, { types: [], gen: 0, cls: 0 });
     else st.a.gen = 0;
     buildCtrls();
@@ -814,6 +823,23 @@
       plistHTML(ids.map(pid => [PI.get(pid), by.get(pid).filter(Boolean).join('・')]));
   }
 
+  const bmLabel = pid => (BM.has(pid) ? '★ ブックマーク済み' : '☆ ブックマーク');
+  // 「チームに追加」：バトル側のチームの一覧から選ぶ。このポケモンを使えないルールのチームは押せない
+  function taddHTML(pid) {
+    const bt = window.BT, ok = new Set(bt.usable(pid)), teams = bt.teams();
+    const rules = [['ch', 'singles'], ['ch', 'doubles'], ['sv', 'singles'], ['sv', 'doubles']];
+    let h = '<p class="fine">入れたいチームを選んでください。技・持ち物・能力ポイントは「おまかせ」と同じ考え方で入れておき、あとでバトルのチーム画面から変えられます。</p>';
+    h += teams.length ? '<ul class="tlist">' + teams.map(t => {
+      const can = ok.has(t.game) && t.count < 6;
+      return `<li><button type="button" data-tadd="${esc(t.id)}"${can ? '' : ' disabled'}><span class="tn">${esc(t.name)}</span>` +
+        `<span class="tm">${esc(t.label)}・${t.count}/6${!ok.has(t.game) ? '・このルールでは使えません' : t.count >= 6 ? '・満員' : ''}</span></button></li>`;
+    }).join('') + '</ul>' : '<p class="fine">まだチームがありません。</p>';
+    h += '<p class="flab">新しいチームを作って入れる</p><div class="tnew">' + rules.map(([g, r]) => {
+      const [gl, rl] = bt.ruleLabel(g, r).split('・');
+      return `<button type="button" data-tnew="${g}_${r}"${ok.has(g) ? '' : ' disabled'}><span class="g">${esc(gl)}</span><span class="r">${esc(rl)}</span></button>`;
+    }).join('') + '</div><p class="fine" id="tadd-msg" role="status"></p>';
+    return h;
+  }
   function viewP(p) {
     const s = SP.get(p[P_DEX]), t1 = p[P_T1], t2 = p[P_T2];
     document.title = p[P_NAME] + '｜ポケモンデータ検索';
@@ -821,6 +847,9 @@
     let h = dbar('ポケモン');
     h += `<div class="dhead"><div><div class="meta"><span class="num">No.${pad(p[P_DEX])}</span>${esc(s[S_GENUS])}</div>` +
       `<h2 tabindex="-1">${esc(p[P_NAME])}</h2><div class="en">${esc(s[S_EN])}</div>${note ? `<span class="note">${note}</span>` : ''}</div>${bigThumb(t1, t2)}</div>`;
+    h += `<div class="pacts"><button type="button" class="pbtn" data-act="bm" data-pid="${p[P_ID]}" aria-pressed="${BM.has(p[P_ID])}">${bmLabel(p[P_ID])}</button>` +
+      (document.getElementById('bt') ? `<button type="button" class="pbtn" data-act="tadd" data-pid="${p[P_ID]}" aria-expanded="false">チームに追加</button>` : '') +
+      `</div><div class="tadd" id="tadd" hidden></div>`;
     h += sec('基本データ', `<dl class="kv">${kv('タイプ', esc(typeName(t1, t2)), true)}${kv('高さ', (p[P_HT] / 10).toFixed(1) + ' m')}` +
       `${kv('重さ', (p[P_WT] / 10).toFixed(1) + ' kg')}${kv('登場', `第${p[P_GEN]}世代`, true)}` +
       `${s[S_CAT] ? kv('区分', s[S_CAT] === 1 ? '伝説のポケモン' : '幻のポケモン', true) : ''}</dl>`);
@@ -889,6 +918,7 @@
   // ---- 画面遷移（#/p/6 のようなハッシュ。ブラウザの戻るでも一覧に戻れる） ----
   function onHash() {
     const h = location.hash;
+    if (inBattle()) return;
     if (navStack.length > 1 && navStack[navStack.length - 2] === h) navStack.pop();
     else navStack.push(h);
     route();
@@ -898,6 +928,7 @@
     else location.hash = '#/';
   }
   function route() {
+    if (inBattle()) return;
     const m = /^#\/([pma])\/(\d+)$/.exec(location.hash);
     if (m) {
       if (view === 'list') listY = window.pageYOffset;
@@ -915,6 +946,7 @@
       els.detail.innerHTML = '';
       els.listView.hidden = false;
       document.title = 'ポケモンデータ検索';
+      if (bmDirty) { bmDirty = false; update(false); }
       window.scrollTo(0, listY);
     }
   }
@@ -1003,6 +1035,7 @@
         st.p.cat = e.target.value;
         e.target.parentNode.classList.toggle('on', e.target.selectedIndex !== 0);
       } else if (e.target.id === 'f-forms') st.p.forms = e.target.checked;
+      else if (e.target.id === 'f-bm') st.p.bm = e.target.checked;
       else return;
       const btn = $('f-more');
       if (btn) btn.innerHTML = moreLabel();
@@ -1015,6 +1048,36 @@
     els.list.addEventListener('click', e => { if (e.target.closest('[data-act="reset"]')) resetFilters(); });
     els.detail.addEventListener('click', e => {
       if (e.target.closest('[data-act="back"]')) { goBack(); return; }
+      const bmb = e.target.closest('[data-act="bm"]');
+      if (bmb) {
+        const pid = +bmb.dataset.pid;
+        toggleBM(pid);
+        bmb.textContent = bmLabel(pid);
+        bmb.setAttribute('aria-pressed', String(BM.has(pid)));
+        // 一覧の★も合わせる（「ブックマークだけ」で絞り込んでいるときは、戻ったときに一覧を作り直す）
+        const nm = els.list.querySelector(`a[href="#/p/${pid}"] .nm`), star = nm && nm.querySelector('.bmk');
+        if (nm && BM.has(pid) && !star) nm.insertAdjacentHTML('afterbegin', '<span class="bmk" aria-label="ブックマーク">★</span>');
+        if (star && !BM.has(pid)) star.remove();
+        if (st.p.bm) bmDirty = true;
+        return;
+      }
+      const ta = e.target.closest('[data-act="tadd"]');
+      if (ta) {
+        const box = $('tadd'), open = box.hidden;
+        box.hidden = !open; ta.setAttribute('aria-expanded', String(open));
+        if (open) box.innerHTML = window.BT ? taddHTML(+ta.dataset.pid) : '<p class="fine">バトルのデータを準備しています。少し待ってから、もう一度押してください。</p>';
+        return;
+      }
+      const tb = e.target.closest('[data-tadd], [data-tnew]');
+      if (tb && window.BT) {
+        const pid = +$('tadd').closest('#detail-view').querySelector('[data-act="tadd"]').dataset.pid;
+        let tid = tb.dataset.tadd;
+        if (!tid) { const [g, r] = tb.dataset.tnew.split('_'); tid = window.BT.create(g, r); }
+        const res = window.BT.add(tid, pid);
+        $('tadd').innerHTML = taddHTML(pid);
+        $('tadd-msg').innerHTML = esc(res.msg) + (res.ok ? `　<a href="#/team/${esc(res.id)}">チームを開く</a>` : '');
+        return;
+      }
       const box = $('calc');
       if (box && box.contains(e.target) && onCalcClick(e, box)) return;
       const b = e.target.closest('[data-lsgame]');
@@ -1042,6 +1105,7 @@
     });
     document.addEventListener('keydown', e => {
       const tag = (document.activeElement && document.activeElement.tagName) || '';
+      if (inBattle()) return;
       if (e.key === 'Escape' && view === 'detail' && !/^(INPUT|SELECT|TEXTAREA)$/.test(tag)) { goBack(); return; }
       if (e.key === '/' && view === 'list' && !/^(INPUT|SELECT|TEXTAREA)$/.test(tag)) { e.preventDefault(); els.q.focus(); }
     });
@@ -1065,6 +1129,7 @@
       return;
     }
     buildIndex(data);
+    loadBM();
     const g = store.get('pd.game');
     if (g === 'all' || g === 'sv' || g === 'ch') st.game = g;
     if (!loadCalc() && st.game === 'ch') calc.mode = 'ch';
@@ -1077,7 +1142,7 @@
     update(false);
     navStack.push(location.hash);
     route();
-    document.documentElement.setAttribute('data-ready', '1');
+    document.documentElement.setAttribute('data-pd-ready', '1');
   }
   init();
 })();

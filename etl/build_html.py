@@ -62,7 +62,6 @@ def main():
     page = (SRC / "template.html").read_text(encoding="utf-8")
     page = put(page, "/*__CSS__*/", css, "css")
     page = put(page, "/*__LICENSE__*/", lic, "license")
-    page = put(page, "/*__LINK_BATTLE__*/", html.escape(os.environ.get("LINK_BATTLE", "battle.html")), "link")
     page = put(page, "/*__JS__*/", js, "js")
     page = put(page, "/*__DATA__*/", data, "data")
 

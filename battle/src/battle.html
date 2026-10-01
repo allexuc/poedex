@@ -12,10 +12,12 @@
 </head>
 <body>
 <div id="app">
+<!--BT-->
+<div id="bt">
   <section id="v-setup">
     <header class="masthead">
       <h1>バトルシミュレーター</h1>
-      <p class="sub">ランクバトルのルールで対戦します。対戦の計算は Pokémon Showdown のエンジンです。<a href="/*__LINK_POKEDEX__*/" target="_blank" rel="noopener">ポケモンデータ検索（図鑑）</a></p>
+      <p class="sub">ランクバトルのルールで対戦します。対戦の計算は Pokémon Showdown のエンジンです。</p>
     </header>
     <div class="card">
       <div class="row"><span class="lab" id="lab-game">ゲーム</span>
@@ -53,10 +55,14 @@
       <details><summary>PokeAPI のライセンス</summary><pre>/*__LIC_POKEAPI__*/</pre></details>
     </footer>
   </section>
+  <section id="v-teams" hidden></section>
   <section id="v-team" hidden></section>
   <section id="v-set" hidden></section>
   <section id="v-pick" hidden></section>
   <section id="v-battle" hidden></section>
+  <section id="v-sim" hidden></section>
+</div>
+<!--/BT-->
 </div>
 <script id="bt-data" type="application/octet-stream">/*__DATA__*/</script>
 <script>/*__ENGINE__*/</script>

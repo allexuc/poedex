@@ -218,3 +218,26 @@ footer pre { white-space: pre-wrap; font-size: 11px; line-height: 1.6; backgroun
 .tts2 { display: inline-flex; gap: 2px; flex: none; vertical-align: middle; }
 .log .pick { font-weight: 700; }
 .benchb .nm .tt { width: 19px; height: 19px; font-size: 11px; }
+
+/* チームの名前・ブックマーク・一覧の見出し */
+input.tname { width: 100%; min-height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); font-size: 16px; font-weight: 700; }
+.bmk { color: #B7791F; margin-right: 4px; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .bmk { color: #F2C14E; } }
+.plist li.hd { padding: 14px 6px 6px; font-size: 12.5px; font-weight: 700; color: var(--ink-2); border: 0; }
+.team > .sel { display: block; margin: 4px 0 10px; }
+.team > .sel select { width: 100%; }
+/* 連戦の結果 */
+.simres .big { font-size: 30px; font-weight: 800; font-family: var(--font-num, inherit); }
+.wbar { height: 10px; border-radius: 999px; background: var(--soft); overflow: hidden; margin: 6px 0 4px; }
+.wbar i { display: block; height: 100%; background: var(--ink); }
+.simres h3 { margin: 20px 0 6px; font-size: 15px; }
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table.stab { width: 100%; border-collapse: collapse; font-size: 13px; }
+.stab th, .stab td { padding: 8px 5px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.stab td.l { white-space: normal; min-width: 7em; }
+.stab th { font-size: 11.5px; color: var(--ink-2); font-weight: 700; }
+.stab .l { text-align: left; }
+#sim-go { margin-top: 6px; }
+
+#v-teams .card > .field:first-child { margin-top: 0; }
+#v-teams .card > .acts, #v-sim .card > .primary { margin-top: 12px; }

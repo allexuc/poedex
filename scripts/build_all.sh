@@ -9,7 +9,6 @@ export PS_DIR
 echo "== 図鑑（PokeAPI）"
 python etl/fetch.py
 python etl/build_data.py
-python etl/build_html.py > /dev/null
 
 echo "== バトル（Pokémon Showdown $(git -C "$PS_DIR" rev-parse --short HEAD)）"
 cd battle
@@ -18,4 +17,7 @@ node export-ps.js "$PS_DIR" ps-data.json "$(git -C "$PS_DIR" rev-parse HEAD)"
 node validate-teams.js "$PS_DIR" sample-teams.txt sample-teams.json
 node make-engine.mjs
 python build_battle_data.py
-python build_page.py
+cd ..
+
+echo "== 図鑑とバトルを1枚のページにまとめる"
+python scripts/build_app.py

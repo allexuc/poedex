@@ -12,9 +12,11 @@
   abilities[i] = [id, 日本語名, Showdown の評価（-1〜5、おまかせ編成で特性を選ぶのに使う）]
   items[i]   = [id, 日本語名, メガシンカする元の姿(Showdown名 or ""), メガシンカ後の姿]
   games[g].species[i] = [id, Showdown名, 図鑑番号, 表示名, 種族名, タイプ1, タイプ2(-1), 種族値6, 特性[], 技[], 必須の持ち物[], 進化前か(1/0),
-                         禁止級か(1/0), 配布限定か(1/0)]
+                         禁止級か(1/0), 配布限定か(1/0), 図鑑の pokemon_id（対応がなければ -1）]
   games[g].restrictedLimit = 禁止級を何匹まで入れられるか
-  games[g].megas[i]   = [メガストーンの添字, 元の姿(Showdown名), メガシンカ後(Showdown名), メガシンカ後の表示名, タイプ1, タイプ2(-1), 種族値6, 特性]
+  games[g].megas[i]   = [メガストーンの添字, 元の姿(Showdown名), メガシンカ後(Showdown名), メガシンカ後の表示名, タイプ1, タイプ2(-1), 種族値6, 特性,
+                         図鑑の pokemon_id（対応がなければ -1）]
+  図鑑の pokemon_id は、図鑑でブックマークしたポケモンや「チームに追加」をバトル側のポケモンに結び付けるのに使う
           特性・技・持ち物は上の配列の添字
 """
 import csv, gzip, json, re, sqlite3, sys
@@ -102,8 +104,8 @@ def main():
 
     # ポケモン：図鑑の姿（PokeAPI の identifier）→ 無ければ種族名。フォルム名を推測では作らない
     sp_name = {num: name for num, name in db.execute("select id, name from species")}
-    pk = [(norm(ident), name, dex) for ident, name, dex in db.execute("select ident, name, dex from pokemon")]
-    by_ident = {i: (n, d) for i, n, d in pk}
+    pk = [(norm(ident), name, dex, pid) for ident, name, dex, pid in db.execute("select ident, name, dex, id from pokemon")]
+    by_ident = {i: (n, d, pid) for i, n, d, pid in pk}
     # 図鑑で省いた見た目違い（ビビヨンの模様など）も、PokeAPI のフォルム名から表示名を作れるようにする
     sp_of = {r["id"]: int(r["species_id"]) for r in rows("pokemon")}
     fname = {r["pokemon_form_id"]: r["form_name"] for r in rows("pokemon_form_names") if r["local_language_id"] == "11"}
@@ -114,8 +116,8 @@ def main():
             continue
         spn, fn = sp_name[dex], fname.get(r["id"], "")
         disp = fn if fn and spn in fn else (f"{spn}（{fn}）" if fn else spn)
-        by_ident[key] = (disp, dex)
-        pk.append((key, disp, dex))
+        by_ident[key] = (disp, dex, -1)          # 図鑑には載せていない見た目違い
+        pk.append((key, disp, dex, -1))
     games = {}
     for g, G in ps["games"].items():
         out, seen = [], {}
@@ -129,12 +131,15 @@ def main():
             if not hit:
                 # 表記ゆれ（Meowstic-F ↔ meowstic-female、Necrozma-Dusk-Mane ↔ necrozma-dusk）は、
                 # 同じ図鑑番号の中で前方一致するもののうち、いちばん近い（長さの差が小さい）1つだけを使う
-                cands = sorted((abs(len(i) - len(s["id"])), i, n) for i, n, d in pk
+                cands = sorted((abs(len(i) - len(s["id"])), i, n, pid) for i, n, d, pid in pk
                                if d == s["num"] and i != norm(s["base"]) and (i.startswith(s["id"]) or s["id"].startswith(i)))
                 if cands and (len(cands) == 1 or cands[0][0] < cands[1][0]):
-                    hit = (cands[0][2], s["num"])
+                    hit = (cands[0][2], s["num"], cands[0][3])
             if not hit and s["id"] in ALIAS:
                 hit = by_ident.get(ALIAS[s["id"]])
+            pid = hit[2] if hit else -1
+            if not hit and not s["forme"]:            # 基本の姿は図鑑番号で結び付ける
+                pid = next((q for i, n, d, q in pk if d == s["num"] and q > 0 and q < 10000), -1)
             if hit:
                 disp = hit[0]
             elif not s["forme"]:
@@ -146,7 +151,7 @@ def main():
             row = [s["id"], s["name"], s["num"], disp, base_ja, t[0], t[1] if len(t) > 1 else -1, s["stats"],
                    [aidx[a] for a in s["abilities"]], sorted(midx[m] for m in s["moves"]),
                    [iidx[i] for i in s["requiredItems"] if i in iidx], 1 if s.get("nfe") else 0,
-                   1 if s.get("restricted") else 0, 1 if s.get("eventOnly") else 0]
+                   1 if s.get("restricted") else 0, 1 if s.get("eventOnly") else 0, pid]
             out.append(row)
         megas = []
         base_ja = {x["name"]: sp_name.get(x["num"], x["name"]) for x in G["species"]}
@@ -154,7 +159,7 @@ def main():
             hit = by_ident.get(norm(mg["forme"])) or by_ident.get(ALIAS.get(norm(mg["forme"]), ""))
             t = [tidx[x] for x in mg["types"]]
             megas.append([iidx[mg["item"]], mg["base"], mg["forme"], hit[0] if hit else "メガ" + base_ja.get(mg["base"], mg["base"]),
-                          t[0], t[1] if len(t) > 1 else -1, mg["stats"], aidx[mg["ability"]]])
+                          t[0], t[1] if len(t) > 1 else -1, mg["stats"], aidx[mg["ability"]], hit[2] if hit else -1])
             if not hit:
                 missing["species"].append(mg["forme"])
         games[g] = {"formats": G["formats"], "tera": G["tera"], "statPoints": G["statPoints"], "restrictedLimit": G["restrictedLimit"],
