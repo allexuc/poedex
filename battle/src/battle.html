@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>バトルシミュレーター</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDGothic:wght@700&family=BIZ+UDPGothic:wght@400;700&family=Dela+Gothic+One&display=swap">
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div id="app">
+  <section id="v-setup">
+    <header class="masthead">
+      <h1>バトルシミュレーター</h1>
+      <p class="sub">ランクバトルのルールで対戦します。対戦の計算は Pokémon Showdown のエンジンです。<a href="/*__LINK_POKEDEX__*/" target="_blank" rel="noopener">ポケモンデータ検索（図鑑）</a></p>
+    </header>
+    <div class="card">
+      <div class="row"><span class="lab" id="lab-game">ゲーム</span>
+        <div class="seg" role="group" aria-labelledby="lab-game" id="seg-game">
+          <button type="button" data-game="ch" aria-pressed="true">チャンピオンズ</button>
+          <button type="button" data-game="sv" aria-pressed="false">SV</button>
+        </div>
+      </div>
+      <div class="row"><span class="lab" id="lab-rule">形式</span>
+        <div class="seg" role="group" aria-labelledby="lab-rule" id="seg-rule">
+          <button type="button" data-rule="singles" aria-pressed="true">シングル</button>
+          <button type="button" data-rule="doubles" aria-pressed="false">ダブル</button>
+        </div>
+      </div>
+      <p class="fine" id="rule-note"></p>
+    </div>
+    <div id="teams"></div>
+    <div class="card">
+      <div class="row"><span class="lab" id="lab-cpu">相手の操作</span>
+        <div class="seg" role="group" aria-labelledby="lab-cpu" id="seg-cpu">
+          <button type="button" data-cpu="1" aria-pressed="true">CPU</button>
+          <button type="button" data-cpu="0" aria-pressed="false">自分で操作</button>
+        </div>
+      </div>
+      <p class="fine">「自分で操作」にすると、1台で両方のプレイヤーの行動を選べます。</p>
+    </div>
+    <p class="problems" id="problems" hidden></p>
+    <button type="button" class="primary" id="start">バトル開始</button>
+    <footer>
+      <p>対戦の計算：<a href="https://github.com/smogon/pokemon-showdown" target="_blank" rel="noopener">Pokémon Showdown</a>（<span id="ps-ver"></span>）。日本語名：PokeAPI。</p>
+      <p>ルールは Pokémon Showdown の「<span id="fmt-names"></span>」に合わせています。CPU は技の威力とタイプ相性をもとに行動を選ぶ簡単なものです。</p>
+      <p>非公式のファンツールです。ポケモン・Pokémon・キャラクター名は任天堂・クリーチャーズ・ゲームフリークの商標です。</p>
+      <details><summary>Pokémon Showdown のライセンス</summary><pre>/*__LIC_PS__*/</pre></details>
+      <details><summary>ts-chacha20 のライセンス</summary><pre>/*__LIC_CHACHA__*/</pre></details>
+      <details><summary>PokeAPI のライセンス</summary><pre>/*__LIC_POKEAPI__*/</pre></details>
+    </footer>
+  </section>
+  <section id="v-team" hidden></section>
+  <section id="v-set" hidden></section>
+  <section id="v-pick" hidden></section>
+  <section id="v-battle" hidden></section>
+</div>
+<script id="bt-data" type="application/octet-stream">/*__DATA__*/</script>
+<script>/*__ENGINE__*/</script>
+<script>/*__JS__*/</script>
+</body>
+</html>

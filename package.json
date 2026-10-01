@@ -1,0 +1,8 @@
+{
+  "name": "pokedex-archive",
+  "private": true,
+  "description": "検証用（etl/verify.py が @smogon/calc の計算結果と実数値を突き合わせる）",
+  "devDependencies": {
+    "@smogon/calc": "0.12.0"
+  }
+}

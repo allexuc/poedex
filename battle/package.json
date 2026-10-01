@@ -1,0 +1,9 @@
+{
+  "name": "pokedex-battle",
+  "private": true,
+  "description": "バトルシミュレーター：Pokémon Showdown のエンジンをブラウザ用に束ねる",
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "ts-chacha20": "1.2.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "_説明": "auto: で始まるものは Showdown のルール名の正規表現。一致したもののうち年とレギュレーションがいちばん新しいものを使う。ID を直接書けば固定できる",
+  "ch": {
+    "singles": "auto:^\\[Gen 9 Champions\\] BSS Reg [A-Z-]+$",
+    "doubles": "auto:^\\[Gen 9 Champions\\] VGC \\d{4} Reg [A-Z-]+$"
+  },
+  "sv": {
+    "singles": "auto:^\\[Gen 9\\] BSS Reg [A-Z]+$",
+    "doubles": "auto:^\\[Gen 9\\] VGC \\d{4} Reg [A-Z]+$"
+  }
+}

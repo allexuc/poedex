@@ -1,0 +1,255 @@
+=== ch_singles ===
+Garchomp @ Choice Scarf
+Ability: Rough Skin
+Level: 50
+EVs: 2 HP / 32 Atk / 32 Spe
+Jolly Nature
+- Earthquake
+- Dragon Claw
+- Rock Slide
+- Iron Head
+
+Charizard @ Charizardite Y
+Ability: Blaze
+Level: 50
+EVs: 2 HP / 32 SpA / 32 Spe
+Timid Nature
+- Flamethrower
+- Solar Beam
+- Air Slash
+- Protect
+
+Kingambit @ Leftovers
+Ability: Supreme Overlord
+Level: 50
+EVs: 32 HP / 32 Atk / 2 Def
+Adamant Nature
+- Kowtow Cleave
+- Sucker Punch
+- Iron Head
+- Swords Dance
+
+Rotom-Wash @ Sitrus Berry
+Ability: Levitate
+Level: 50
+EVs: 32 HP / 32 Def / 2 SpD
+Bold Nature
+- Hydro Pump
+- Volt Switch
+- Will-O-Wisp
+- Protect
+
+Dragonite @ Lum Berry
+Ability: Multiscale
+Level: 50
+EVs: 2 HP / 32 Atk / 32 Spe
+Adamant Nature
+- Extreme Speed
+- Dragon Dance
+- Earthquake
+- Fire Punch
+
+Gengar @ Focus Sash
+Ability: Cursed Body
+Level: 50
+EVs: 2 HP / 32 SpA / 32 Spe
+Timid Nature
+- Shadow Ball
+- Sludge Bomb
+- Thunderbolt
+- Protect
+
+=== ch_doubles ===
+Incineroar @ Sitrus Berry
+Ability: Intimidate
+Level: 50
+EVs: 32 HP / 2 Atk / 32 SpD
+Careful Nature
+- Fake Out
+- Flare Blitz
+- Darkest Lariat
+- Parting Shot
+
+Pelipper @ Focus Sash
+Ability: Drizzle
+Level: 50
+EVs: 2 HP / 32 SpA / 32 Spe
+Modest Nature
+- Hurricane
+- Weather Ball
+- Tailwind
+- Protect
+
+Archaludon @ Leftovers
+Ability: Stamina
+Level: 50
+EVs: 32 HP / 32 SpA / 2 SpD
+Modest Nature
+- Electro Shot
+- Flash Cannon
+- Draco Meteor
+- Protect
+
+Garchomp @ Garchompite
+Ability: Rough Skin
+Level: 50
+EVs: 2 HP / 32 Atk / 32 Spe
+Jolly Nature
+- Earthquake
+- Dragon Claw
+- Rock Slide
+- Protect
+
+Sinistcha @ Mental Herb
+Ability: Hospitality
+Level: 50
+EVs: 32 HP / 32 Def / 2 SpA
+Relaxed Nature
+- Matcha Gotcha
+- Rage Powder
+- Trick Room
+- Protect
+
+Whimsicott @ Lum Berry
+Ability: Prankster
+Level: 50
+EVs: 32 HP / 2 SpA / 32 Spe
+Timid Nature
+- Tailwind
+- Moonblast
+- Encore
+- Protect
+
+=== sv_singles ===
+Miraidon @ Choice Specs
+Ability: Hadron Engine
+Level: 50
+Tera Type: Electric
+EVs: 4 HP / 252 SpA / 252 Spe
+Timid Nature
+- Electro Drift
+- Draco Meteor
+- Volt Switch
+- Dazzling Gleam
+
+Garchomp @ Rocky Helmet
+Ability: Rough Skin
+Level: 50
+Tera Type: Steel
+EVs: 252 HP / 4 Def / 252 Spe
+Jolly Nature
+- Earthquake
+- Dragon Tail
+- Stealth Rock
+- Spikes
+
+Gholdengo @ Choice Scarf
+Ability: Good as Gold
+Level: 50
+Tera Type: Steel
+EVs: 4 HP / 252 SpA / 252 Spe
+Timid Nature
+- Make It Rain
+- Shadow Ball
+- Trick
+- Focus Blast
+
+Dondozo @ Leftovers
+Ability: Unaware
+Level: 50
+Tera Type: Grass
+EVs: 252 HP / 252 Def / 4 SpD
+Impish Nature
+- Wave Crash
+- Body Press
+- Rest
+- Sleep Talk
+
+Kingambit @ Black Glasses
+Ability: Supreme Overlord
+Level: 50
+Tera Type: Dark
+EVs: 252 HP / 252 Atk / 4 SpD
+Adamant Nature
+- Kowtow Cleave
+- Sucker Punch
+- Iron Head
+- Swords Dance
+
+Great Tusk @ Booster Energy
+Ability: Protosynthesis
+Level: 50
+Tera Type: Ground
+EVs: 4 HP / 252 Atk / 252 Spe
+Jolly Nature
+- Headlong Rush
+- Ice Spinner
+- Rapid Spin
+- Knock Off
+
+=== sv_doubles ===
+Calyrex-Shadow @ Focus Sash
+Ability: As One (Spectrier)
+Level: 50
+Tera Type: Fairy
+EVs: 4 HP / 252 SpA / 252 Spe
+Timid Nature
+- Astral Barrage
+- Psychic
+- Nasty Plot
+- Protect
+
+Incineroar @ Sitrus Berry
+Ability: Intimidate
+Level: 50
+Tera Type: Grass
+EVs: 252 HP / 4 Atk / 252 SpD
+Careful Nature
+- Fake Out
+- Flare Blitz
+- Knock Off
+- Parting Shot
+
+Rillaboom @ Assault Vest
+Ability: Grassy Surge
+Level: 50
+Tera Type: Fire
+EVs: 252 HP / 252 Atk / 4 SpD
+Adamant Nature
+- Fake Out
+- Grassy Glide
+- Wood Hammer
+- U-turn
+
+Urshifu-Rapid-Strike @ Choice Scarf
+Ability: Unseen Fist
+Level: 50
+Tera Type: Water
+EVs: 4 HP / 252 Atk / 252 Spe
+Jolly Nature
+- Surging Strikes
+- Close Combat
+- Aqua Jet
+- U-turn
+
+Amoonguss @ Rocky Helmet
+Ability: Regenerator
+Level: 50
+Tera Type: Water
+EVs: 252 HP / 252 Def / 4 SpD
+Relaxed Nature
+- Spore
+- Rage Powder
+- Pollen Puff
+- Protect
+
+Farigiraf @ Throat Spray
+Ability: Armor Tail
+Level: 50
+Tera Type: Fairy
+EVs: 252 HP / 252 SpA / 4 SpD
+Modest Nature
+- Trick Room
+- Psychic
+- Hyper Voice
+- Protect
