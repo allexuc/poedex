@@ -401,3 +401,4 @@ footer pre { white-space: pre-wrap; font-size: 11px; line-height: 1.6; backgroun
 .tnew .r { display: block; font-weight: 700; font-size: 14px; }
 .tnew button:disabled { opacity: 0.45; cursor: default; }
 #tadd-msg a { font-weight: 700; }
+.tlist .tn, .tlist .tm, #tadd-msg { overflow-wrap: anywhere; }

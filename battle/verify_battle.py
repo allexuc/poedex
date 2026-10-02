@@ -63,6 +63,147 @@ def play_until_end(pg, max_actions=120, shot_at=None):
     return actions
 
 
+TEAM = ("Zoroark-Hisui @ Focus Sash\nAbility: Illusion\nTimid Nature\n- Shadow Ball\n- Hyper Voice\n\n"
+        "Dragonite @ Leftovers\nAbility: Multiscale\n- Extreme Speed\n\nGarchomp @ Life Orb\nAbility: Rough Skin\n- Earthquake\n")
+
+def check_illusion(b):
+    """相手（p2）のゾロアークが先発し、最後に選んだカイリューに化けている間の表示"""
+    print("■ イリュージョン（相手のゾロアーク）")
+    ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    pg, errs = open_page(ctx)                                # 先に対戦画面を開き、あなたのチーム（サンプル）を決めておく
+    pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+    pg.select_option("#nt-rule", "ch_singles")
+    pg.tap("[data-newteam='empty']"); pg.wait_for_selector("#paste")
+    tid = pg.evaluate("location.hash.split('/')[2]")
+    pg.fill("#paste", TEAM); pg.tap(f"[data-import='{tid}']")
+    pg.goto(URL + "#/b"); pg.wait_for_selector("#start")
+    pg.select_option("[data-pickteam='opp']", tid)
+    pg.tap("#seg-cpu [data-cpu='0']")                       # 両方を自分で操作する
+    pg.tap("#start"); pg.wait_for_selector("#b-cmd .pvb")
+    pv = pg.locator("#b-cmd .pvb")
+    for k in range(3): pv.nth(k).tap()
+    pg.tap("[data-act='pvgo']"); pg.wait_for_timeout(300)
+    pv = pg.locator("#b-cmd .pvb")                            # 相手の選出：ゾロアーク → ガブリアス → カイリュー
+    for k in (0, 2, 1): pv.nth(k).tap()
+    pg.tap("[data-act='pvgo']"); pg.wait_for_selector("#b-cmd .mvb")
+    foe = pg.locator("#b-field .pk").first
+    check("化けている間は、相手のカードがカイリュー（ドラゴン・ひこう）", [foe.locator(".nm").inner_text(), foe.locator(".tts").inner_text().replace("\n", "")], ["カイリュー", "竜飛"])
+    check("ログもカイリュー", "相手は カイリュー を くりだした" in pg.inner_text("#b-log"), True)
+    def p2_moves():                                        # 相手（p2）の番なら シャドーボール を選ぶ
+        if "相手（p2）の番" in pg.inner_text("#b-cmd .q"):
+            pg.locator("#b-cmd .mvb").first.tap(); pg.wait_for_timeout(300)
+    p2_moves()
+    pg.wait_for_function("document.querySelector('#b-cmd .q') && document.querySelector('#b-cmd .q').textContent.includes('ガブリアス は どうする')", timeout=10000)
+    eq = pg.locator("#b-cmd .mvb", has_text="じしん")
+    check("技の相性の目安も化けている姿で（じしん → 効果なし）", "効果なし" in eq.inner_text(timeout=3000), True)
+    pg.screenshot(path=str(SHOTS / "illusion.png"))
+    eq.tap(); pg.wait_for_timeout(300)                        # あなた：じしん（本当は ゾロアーク に当たる）
+    if pg.locator("#b-cmd .q").count(): p2_moves()
+    pg.wait_for_function("document.querySelector('#b-log').innerText.includes('ターン 2') || document.querySelector('#b-cmd .result')", timeout=15000)
+    pg.wait_for_timeout(300)
+    log = pg.inner_text("#b-log")
+    foe = pg.locator("#b-field .pk").first
+    print("  ログ（抜粋）:", [l for l in log.splitlines() if 'ゾロアーク' in l or 'イリュージョン' in l][:4])
+    check("攻撃が当たって正体が分かったら、ゾロアーク（ノーマル・ゴースト）", [foe.locator(".nm").inner_text(), foe.locator(".tts").inner_text().replace("\n", "")], ["ゾロアーク", "無霊"])
+    check("  errors", errs, [])
+    ctx.close()
+
+
+YOU = ("Zoroark-Hisui @ Focus Sash\nAbility: Illusion\nTimid Nature\n- Shadow Ball\n\n"
+       "Dragonite @ Leftovers\nAbility: Multiscale\n- Extreme Speed\n\nGarchomp @ Life Orb\nAbility: Rough Skin\n- Earthquake\n")
+OPP = "".join(f"{sp}\nAbility: {ab}\nModest Nature\n- Ice Beam\n- Dark Pulse\n\n" for sp, ab in (("Sharpedo", "Rough Skin"), ("Blastoise", "Torrent"), ("Absol", "Pressure")))
+
+def check_cpu_illusion(b):
+    print("■ CPU があなたのイリュージョンにだまされる")
+    ctx = new_context(b, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    pg, errs = open_page(ctx, "?autotest=1")
+    pg.evaluate("([y, o]) => { __bt.useTexts('ch', 'singles', y, o); __bt.startHuman('ch', 'singles'); }", [YOU, OPP])
+    pg.wait_for_selector("#b-cmd .pvb")
+    pv = pg.locator("#b-cmd .pvb")
+    for k in (0, 2, 1): pv.nth(k).tap()                      # あなた：ゾロアーク → ガブリアス → カイリュー（最後のカイリューに化ける）
+    pg.tap("[data-act='pvgo']"); pg.wait_for_timeout(300)
+    pv = pg.locator("#b-cmd .pvb")
+    for k in range(3): pv.nth(k).tap()
+    pg.tap("[data-act='pvgo']"); pg.wait_for_selector("#b-cmd .mvb")
+    pg.wait_for_function("__bt.state().over === false && document.querySelector('#b-cmd .mvb')")
+    fooled = pg.evaluate("__bt.cpuBestMove('p2')")
+    knows = pg.evaluate("__bt.cpuBestMove('p2', true)")
+    print("  CPU から見た相手:", fooled["seen"], "／ だまされているとき:", fooled["best"], "／ 正体を知っているとき:", knows["best"])
+    check("CPU にはカイリュー（ドラゴン・ひこう）に見えている", [fooled["seen"]["name"], fooled["seen"]["types"]], ["カイリュー", ["Dragon", "Flying"]])
+    check("カイリューだと思って れいとうビーム を選ぶ（正体を知っていれば あくのはどう）", [fooled["best"], knows["best"]], ["icebeam", "darkpulse"])
+    check("  errors", errs, [])
+    ctx.close()
+
+
+LONG_TEAM = ("Tauros-Paldea-Blaze @ Choice Band\nAbility: Intimidate\n- Raging Bull\n- Close Combat\n- Flare Blitz\n- Wild Charge\n\n"
+             "Urshifu-Rapid-Strike @ Choice Scarf\nAbility: Unseen Fist\n- Surging Strikes\n- Close Combat\n- U-turn\n- Aqua Jet\n\n"
+             "Ogerpon-Hearthflame @ Hearthflame Mask\nAbility: Mold Breaker\n- Ivy Cudgel\n- Horn Leech\n- Spiky Shield\n- Swords Dance\n\n"
+             "Zoroark-Hisui @ Focus Sash\nAbility: Illusion\n- Shadow Ball\n- Hyper Voice\n- Nasty Plot\n- Flamethrower\n\n"
+             "Samurott-Hisui @ Life Orb\nAbility: Sharpness\n- Ceaseless Edge\n- Razor Shell\n- Sucker Punch\n- Swords Dance\n\n"
+             "Necrozma-Dusk-Mane @ Leftovers\nAbility: Prism Armor\n- Sunsteel Strike\n- Earthquake\n- Dragon Dance\n- Morning Sun\n")
+LONG_NAME = "W" * 40
+FIND = """() => {
+  const W = document.documentElement.clientWidth, out = [];
+  for (const el of document.querySelectorAll('#app *')) {
+    if (!el.getClientRects().length || el.closest('.scroll-x')) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width && (r.right > W + 1 || r.left < -1)) out.push('画面の外: ' + (el.className || el.tagName) + '「' + (el.textContent || '').trim().slice(0, 16) + '」');
+  }
+  for (const el of document.querySelectorAll('#app .mon, #app .pvb, #app .benchb, #app .mvb, #app .pk, #app .slot, #app .pickbtn, #app .card, #app .tlist button, #app .bar, #app .row > a')) {
+    if (el.getClientRects().length && el.scrollWidth > el.clientWidth + 1) out.push('枠からあふれる: ' + el.className + '「' + el.textContent.trim().slice(0, 16) + '」');
+  }
+  return [...new Set(out)].slice(0, 6);
+}"""
+
+def check_overflow(b):
+    print("■ 長い名前でも画面からはみ出さない")
+    for width in (320, 390):
+        ctx = new_context(b, viewport={"width": width, "height": 800}, device_scale_factor=2, is_mobile=True, has_touch=True)
+        pg, errs = open_page(ctx)
+        pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+        pg.select_option("#nt-rule", "sv_singles")
+        pg.tap("[data-newteam='empty']"); pg.wait_for_selector("#paste")
+        tid = pg.evaluate("location.hash.split('/')[2]")
+        pg.fill("#paste", LONG_TEAM); pg.tap(f"[data-import='{tid}']")
+        pg.fill("#t-name", LONG_NAME)
+        bad = {}
+        def look(label, h=None, wait=None):
+            if h:
+                pg.goto(URL + h)
+            if wait:
+                pg.wait_for_selector(wait)
+            pg.wait_for_timeout(250)
+            r = pg.evaluate(FIND)
+            if r:
+                bad[label] = r
+        look("チーム編集", f"#/team/{tid}", ".slot")
+        look("1匹の編集", f"#/set/{tid}/0", "#s-nat")
+        look("ポケモンを選ぶ", f"#/set/{tid}/0/pick/sp", "#pick-list li")
+        look("持ち物を選ぶ", f"#/set/{tid}/0/pick/item", "#pick-list li")
+        look("技を選ぶ", f"#/set/{tid}/0/pick/move0", "#pick-list li")
+        look("チーム一覧", "#/teams", "#v-teams .card.team")
+        pg.locator(f"#v-teams [data-useteam='{tid}']").tap(); pg.wait_for_selector("#start")
+        look("対戦の設定")
+        look("連戦", "#/sim", "#sim-go")
+        pg.goto(URL + "#/b"); pg.wait_for_selector("#start")
+        pg.tap("#start"); pg.wait_for_selector("#b-cmd .pvb")
+        look("選出")
+        pv = pg.locator("#b-cmd .pvb")
+        for k in range(3): pv.nth(k).tap()
+        pg.tap("[data-act='pvgo']"); pg.wait_for_selector("#b-cmd .mvb")
+        look("対戦（技を選ぶ）")
+        sw = pg.locator("#b-cmd [data-act='sw'], #b-cmd button", has_text="交代")
+        if sw.count():
+            sw.first.tap(); pg.wait_for_selector("#b-cmd [data-sw]"); look("対戦（交代先）")
+        look("図鑑（ケンタロス パルデアのすがた）", "#/p/10251", "[data-act='tadd']")
+        pg.tap("[data-act='tadd']"); pg.wait_for_selector("#tadd .tnew"); look("図鑑（チームに追加）")
+        pg.goto(URL + "#/"); pg.wait_for_selector("#list .row"); pg.fill("#q", "すがた"); pg.wait_for_timeout(500); look("図鑑の一覧")
+        pg.screenshot(path=str(SHOTS / f"overflow_{width}.png"))
+        check(f"幅 {width}：どの画面も はみ出さない", bad, {})
+        check(f"  errors（幅 {width}）", errs, [])
+        ctx.close()
+
+
 def main():
     with sync_playwright() as pw:
         b = pw.chromium.launch()
@@ -207,6 +348,10 @@ def main():
         check("読み取れないときは手で貼る方法を案内", "長押しして貼り付け" in pg.inner_text("#import-notes"), True)
         check("  errors", errs + errs2, [])
         ctx.close()
+
+        check_illusion(b)
+        check_cpu_illusion(b)
+        check_overflow(b)
 
         print("■ おまかせ編成（画面の操作）")
         ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)

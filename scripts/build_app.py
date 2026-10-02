@@ -48,6 +48,9 @@ def scope_css(css, scope):
 
 
 SHELL_CSS = """
+/* 念のため：どこかが横にはみ出しても、ページ全体が広がって（スマホで縮んで）見えないようにする */
+#app { overflow-x: clip; }
+#bt { overflow-wrap: anywhere; }
 .appnav { display: flex; gap: 4px; padding: 8px 0 2px; margin: 0 -2px; }
 .appnav a { flex: 1 1 0; display: flex; align-items: center; justify-content: center; min-height: 40px; padding: 0 6px; border-radius: 999px;
   font-weight: 700; font-size: 14px; color: var(--ink-2); text-decoration: none; white-space: nowrap; }

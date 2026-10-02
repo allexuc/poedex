@@ -335,9 +335,12 @@
     if (G.restrictedLimit < 6) parts.push(`禁止級の伝説のポケモンは${G.restrictedLimit}匹まで`);
     return `${S.game === 'ch' ? 'Pokémon Champions' : 'SV'} のランクバトルと同じルール（${esc(f.name)}）：${parts.join('・')}`;
   }
+  // 小さな枠では、フォルム名の「のすがた」「フォルム」などを省いて短くする（例：ゾロアーク（ヒスイのすがた）→ ゾロアーク（ヒスイ））
+  const nameHTML = d => esc(d).replace('（', '<wbr>（');
+  const shortDisp = d => d.replace(/（([^）]*)）/g, (m, x) => { const y = x.replace(/のすがた|フォルム|のかた|のめん/g, ''); return y ? `（${y}）` : m; });
   function monChip(s, g) {
     const sp = GD[g || S.game].byPs.get(s.sp);
-    return `<li class="mon">${tts(sp)}<span style="min-width:0"><span class="nm">${esc(sp[SP_DISP])}</span>` +
+    return `<li class="mon">${tts(sp)}<span class="mt"><span class="nm">${nameHTML(shortDisp(sp[SP_DISP]))}</span>` +
       `<span class="it">${s.item ? esc(jaItem(s.item)) : '持ち物なし'}</span></span></li>`;
   }
 
@@ -1483,6 +1486,12 @@
   }
 
   // ---- 場の表示（Showdown の battle オブジェクトから読む） -----------------
+  // イリュージョン：相手から見える姿。化けている間は p.illusion（化けた先のポケモン）の名前とタイプを見せる
+  function seen(p) {
+    if (!p.illusion) return { name: p.name, types: typesOf(p), mega: !!p.species.isMega };
+    const t = p.terastallized && p.terastallized !== 'Stellar' ? [p.terastallized] : p.illusion.species.types;
+    return { name: p.illusion.name, types: t.map(typeIdx), mega: !!p.illusion.species.isMega };
+  }
   function typesOf(p) {
     const t = p.terastallized && p.terastallized !== 'Stellar' ? [p.terastallized] : p.types;
     return t.map(typeIdx);
@@ -1492,9 +1501,12 @@
     const exact = sid === 'p1' || !B.cpu.p2 || AUTOTEST;
     const pc = pct(p.hp, p.maxhp);
     const bst = Object.entries(p.boosts).filter(([, v]) => v).map(([k, v]) => `<span class="bst ${v > 0 ? 'up' : 'down'}">${BOOST_SHORT[k] || k}${v > 0 ? '+' : ''}${v}</span>`).join('');
-    const badges = (p.terastallized ? `<span class="badge">テラス ${esc(jaType(p.terastallized))}</span>` : '') + (p.species.isMega ? '<span class="badge">メガ</span>' : '');
-    return `<div class="pk${p.fainted ? ' fnt' : ''}"><div class="l1"><span class="nm">${esc(p.name)}</span>` +
-      `<span class="tts">${typesOf(p).map(tt).join('')}</span></div><div class="hpbar"><i class="${pc > 50 ? '' : pc > 20 ? 'mid' : 'lo'}" style="width:${pc}%"></i></div>` +
+    // 相手側は見えている姿で出す（イリュージョンを見破れないように）。自分側は本当の姿と、何に化けているかを出す
+    const v = sid === 'p2' ? seen(p) : { name: p.name, types: typesOf(p), mega: !!p.species.isMega };
+    const badges = (p.terastallized ? `<span class="badge">テラス ${esc(jaType(p.terastallized))}</span>` : '') + (v.mega ? '<span class="badge">メガ</span>' : '') +
+      (sid === 'p1' && p.illusion ? `<span class="badge">イリュージョン：${esc(p.illusion.name)}に見えている</span>` : '');
+    return `<div class="pk${p.fainted ? ' fnt' : ''}"><div class="l1"><span class="nm">${esc(v.name)}</span>` +
+      `<span class="tts">${v.types.map(tt).join('')}</span></div><div class="hpbar"><i class="${pc > 50 ? '' : pc > 20 ? 'mid' : 'lo'}" style="width:${pc}%"></i></div>` +
       `<div class="l3"><span class="hpt">${exact ? `${p.hp}/${p.maxhp}` : `${pc}%`}</span>${p.status ? `<span class="st ${p.status}">${STATUS_JA[p.status] || p.status}</span>` : ''}${badges}${bst}</div></div>`;
   }
   const cond = (name, dur) => `<span class="cond">${esc(name)}${dur ? ` 残り${dur}` : ''}</span>`;
@@ -1578,20 +1590,20 @@
   }
   function cmdPreview(ui) {
     const req = ui.req, n = B.f.pick, foe = B.teams[ui.side === 'p1' ? 'p2' : 'p1'], G = GD[B.game];
-    const foeHTML = foe.map(s => { const sp = G.byPs.get(s.sp); return `<span>${tts(sp)}${esc(sp[SP_DISP])}</span>`; }).join('');
+    const foeHTML = foe.map(s => { const sp = G.byPs.get(s.sp); return `<span>${tts(sp)}${esc(shortDisp(sp[SP_DISP]))}</span>`; }).join('');
     const mine = req.side.pokemon.map((p, k) => {
       const ord = ui.order.indexOf(k + 1) + 1, sp = G.byPs.get(p.details.split(',')[0]) || G.byId.get(toID(p.details.split(',')[0]));
       return `<button type="button" class="pvb" data-pv="${k + 1}" aria-pressed="${ord > 0}">${ord ? `<span class="ord">${ord}</span>` : ''}` +
-        `<span class="nm">${sp ? tts(sp) : ''} ${esc(sp ? sp[SP_DISP] : identName(p.ident))}</span><span class="it">${p.item ? esc(jaItem(p.item)) : '持ち物なし'}</span></button>`;
+        `<span class="nm">${sp ? tts(sp) : ''} ${sp ? nameHTML(shortDisp(sp[SP_DISP])) : esc(identName(p.ident))}</span><span class="it">${p.item ? esc(jaItem(p.item)) : '持ち物なし'}</span></button>`;
     }).join('');
     return `<p class="q">選出する ${n}匹を、出す順に タップ${whoLabel(ui.side)}</p><p class="fine" style="margin:0 0 6px">相手のチーム</p><div class="pvfoe">${foeHTML}</div>` +
       `<p class="fine" style="margin:8px 0 6px">${B.f.gameType === 'doubles' ? '最初の2匹が 先発です' : '最初の1匹が 先発です'}</p><div class="pv">${mine}</div>` +
       `<div class="opts"><button type="button" class="btn ink" data-act="pvgo"${ui.order.length === n ? '' : ' disabled'}>この順で決定</button>` +
       '<button type="button" class="btn" data-act="pvclear">選び直す</button></div>';
   }
-  function effOf(moveType, target) {
+  function effOf(moveType, target) {        // 相手への相性の目安（イリュージョン中は化けている姿のタイプで見る）
     if (!target) return '';
-    const types = target.terastallized && target.terastallized !== 'Stellar' ? [target.terastallized] : target.types;
+    const types = target.terastallized && target.terastallized !== 'Stellar' ? [target.terastallized] : target.illusion ? target.illusion.species.types : target.types;
     try {
       if (!PSEngine.Dex.getImmunity(moveType, types)) return '<span class="eff none">効果なし</span>';
       const e = PSEngine.Dex.getEffectiveness(moveType, types);
@@ -1631,7 +1643,7 @@
   }
   function cmdTarget(ui) {
     const act = ui.req.active[ui.slot], m = act.moves[ui.mv - 1], mi = moveInfo(m.id);
-    const opts = targetOptions(ui, m.target).map(o => `<button type="button" class="benchb" data-tg="${o.t}"><span class="nm">${o.self ? '自分' : (o.foe ? '相手の ' : '味方の ') + esc(o.p.name)}</span>` +
+    const opts = targetOptions(ui, m.target).map(o => `<button type="button" class="benchb" data-tg="${o.t}"><span class="nm">${o.self ? '自分' : o.foe ? '相手の ' + esc(seen(o.p).name) : '味方の ' + esc(o.p.name)}</span>` +
       `<span class="hpt">${o.foe && mi.cat ? effOf(mi.en, o.p) || 'ふつう' : ''}</span></button>`).join('');
     return `<p class="q">${esc(mi.name)} を だれに？${whoLabel(ui.side)}</p><div class="benches">${opts}</div><div class="opts"><button type="button" class="btn" data-act="tomain">技を選び直す</button></div>`;
   }
@@ -1728,6 +1740,15 @@
       { spread, hits, acc: move.accuracy === true ? 1 : move.accuracy / 100 });
     return Math.min(frac, 1) + (frac >= 1 ? 0.5 : 0);
   }
+  // CPU から見た相手：イリュージョン中は、化けた先のポケモンだと思い込む。
+  // 名前・タイプ・特性・能力値は化けた先のもの、HP の割合・状態異常・能力変化・テラスタルは見たままにする
+  function asSeen(p) {
+    if (!p || !p.illusion) return p;
+    const il = p.illusion;
+    return { name: il.name, species: il.species, types: il.types, ability: il.ability, storedStats: il.storedStats, maxhp: il.maxhp,
+      hp: p.hp > 0 ? Math.max(1, Math.round((il.maxhp * p.hp) / p.maxhp)) : 0, terastallized: p.terastallized, boosts: p.boosts,
+      status: p.status, volatiles: p.volatiles, fainted: p.fainted, side: p.side, lastMove: p.lastMove, moveSlots: [] };
+  }
   // 相手の技は分からないので、タイプ一致・威力90の技を持っていると仮定して「受けるダメージ」を見積もる
   function threat(foe, me) {
     if (!foe || foe.fainted || !me || me.fainted) return 0;
@@ -1754,7 +1775,7 @@
   }
   // 相性の評価：与えるダメージ − 受けるダメージ ＋ すばやさの有利。交代で出るときは最初の1発を受ける分を引く
   function matchup(side, mon, entering, usable) {
-    const b = B.stream.battle, foes = b[side].foe.active.filter(p => p && !p.fainted);
+    const b = B.stream.battle, foes = b[side].foe.active.filter(p => p && !p.fainted).map(asSeen);
     if (!foes.length || !mon) return 0;
     const off = bestOffense(mon, foes, usable), thr = Math.min(1.2, Math.max(...foes.map(f => threat(f, mon))));
     const faster = foes.every(f => (effSpeed(mon) > effSpeed(f)) !== !!b.field.pseudoWeather.trickroom);
@@ -1776,7 +1797,7 @@
   const HEALS = new Set(['recover', 'roost', 'slackoff', 'softboiled', 'moonlight', 'morningsun', 'synthesis', 'shoreup', 'milkdrink', 'lifedew',
     'strengthsap', 'healorder', 'junglehealing', 'lunarblessing']);
   const SLEEP = new Set(['spore', 'sleeppowder', 'hypnosis', 'lovelykiss', 'darkvoid', 'sing', 'grasswhistle']);
-  const avgSpeed = sd => { const a = sd.active.filter(p => p && !p.fainted); return a.length ? a.reduce((x, p) => x + effSpeed(p), 0) / a.length : 0; };
+  const avgSpeed = (sd, foe) => { const a = sd.active.filter(p => p && !p.fainted).map(p => (foe ? asSeen(p) : p)); return a.length ? a.reduce((x, p) => x + effSpeed(p), 0) / a.length : 0; };
   function monBenefit(p, mode) {            // 対戦中のポケモンが、その天候・フィールドでどれだけ強くなるか
     return benefitOf(p.ability, p.types.map(typeIdx), new Set(p.moveSlots.map(m => m.id)), mode);
   }
@@ -1789,7 +1810,7 @@
   }
   function statusScore(side, slot, mon, move, target) {
     const b = B.stream.battle, id = move.id, dbl = B.f.gameType === 'doubles', me = b[side], foeSide = me.foe;
-    const foes = foeSide.active.filter(p => p && !p.fainted), hpf = mon.hp / mon.maxhp, tr = !!b.field.pseudoWeather.trickroom;
+    const foes = foeSide.active.filter(p => p && !p.fainted).map(asSeen), hpf = mon.hp / mon.maxhp, tr = !!b.field.pseudoWeather.trickroom;
     const thr = Math.max(0, ...foes.map(f => threat(f, mon)));
     const outsped = foes.some(f => (effSpeed(f) > effSpeed(mon)) !== tr);
     const danger = thr >= 1 && outsped;                       // この番に先に倒されそう
@@ -1799,8 +1820,8 @@
     if (SETUPS.has(id)) return danger || hpf < 0.5 || boosts >= 2 ? 0.04 : 0.5 + 0.3 * (1 - Math.min(thr, 1)) + (SPEEDUP.has(id) && outsped ? 0.1 : 0);
     if (HEALS.has(id)) return danger ? 0.1 : (1 - hpf) * 1.2;
     if (id === 'rest') return mon.status && hpf < 0.6 ? 0.7 : hpf < 0.35 && !danger ? 0.5 : 0.02;
-    if (id === 'trickroom') return tr ? -1 : avgSpeed(me) < avgSpeed(foeSide) ? 0.9 : 0.05;
-    if (id === 'tailwind') return me.sideConditions.tailwind ? 0 : (avgSpeed(me) < avgSpeed(foeSide) ? 0.8 : 0.35) * (dbl ? 1 : 0.7);
+    if (id === 'trickroom') return tr ? -1 : avgSpeed(me) < avgSpeed(foeSide, true) ? 0.9 : 0.05;
+    if (id === 'tailwind') return me.sideConditions.tailwind ? 0 : (avgSpeed(me) < avgSpeed(foeSide, true) ? 0.8 : 0.35) * (dbl ? 1 : 0.7);
     if (id === 'reflect' || id === 'lightscreen') return me.sideConditions[id] ? 0 : 0.5;
     if (id === 'auroraveil') return me.sideConditions.auroraveil || !/snow|hail/.test(b.field.weather) ? 0 : 0.7;
     if (MODE_BY_MOVE[id]) return modeMoveScore(side, MODE_BY_MOVE[id]);
@@ -1838,7 +1859,7 @@
     return 0.12;
   }
   function scoreMove(side, slot, mon, move, t) {
-    const b = B.stream.battle, foes = b[side].foe.active, allies = b[side].active, dbl = B.f.gameType === 'doubles';
+    const b = B.stream.battle, foes = b[side].foe.active.map(asSeen), allies = b[side].active, dbl = B.f.gameType === 'doubles';
     const target = t == null ? foes.find(p => p && !p.fainted) : t > 0 ? foes[t - 1] : allies[-t - 1];
     if (move.category === 'Status') return statusScore(side, slot, mon, move, target);
     if (t != null && t < 0) return -1;
@@ -2087,6 +2108,23 @@
           B.req[side] = req; B.done[side] = false; B.ui = null; B.err[side] = '';
           window.__sent = null; B.ps[side].write = c => { window.__sent = c; };
           renderCmd();
+        },
+        useTexts(game, rule, youText, oppText) {
+          S.game = game; S.rule = rule;
+          const mk = (text, name) => addTeam(game, rule, uniqueName(name), PSEngine.Teams.import(text).map(p => fromPS(p, game, [])).filter(Boolean));
+          const s = selOf(game, rule);
+          s.you = mk(youText, '検証（あなた）').id; s.opp = mk(oppText, '検証（相手）').id;
+          save();
+        },
+        startHuman(game, rule) { S.game = game; S.rule = rule; startBattle(); B.cpu.p1 = false; B.cpu.p2 = false; },
+        cpuBestMove(side, noIllusion) {   // noIllusion=true：相手の正体を知っているときと比べるため、イリュージョンを外して考える
+          const b = B.stream.battle, mon = b[side].active[0], foes = b[side].foe.active, saved = foes.map(p => p && p.illusion);
+          if (noIllusion) foes.forEach(p => { if (p) p.illusion = null; });
+          try {
+            const scores = B.req[side].active[0].moves.map(m => ({ id: m.id, s: scoreMove(side, 0, mon, b.dex.moves.get(m.id), null) })).sort((x, y) => y.s - x.s);
+            const v = asSeen(foes[0]);
+            return { best: scores[0].id, seen: { name: v.name, types: v.types } };
+          } finally { foes.forEach((p, k) => { if (p) p.illusion = saved[k]; }); }
         },
         autoBoth() {
           const s = selOf(S.game, S.rule);
