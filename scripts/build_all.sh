@@ -6,14 +6,20 @@ cd "$(dirname "$0")/.."
 : "${PS_DIR:?Pokémon Showdown を clone したディレクトリを PS_DIR に指定してください}"
 export PS_DIR
 
-echo "== 図鑑（PokeAPI）"
+echo "== データの取得（PokeAPI）"
 python etl/fetch.py
-python etl/build_data.py
 
-echo "== バトル（Pokémon Showdown $(git -C "$PS_DIR" rev-parse --short HEAD)）"
+echo "== Pokémon Showdown $(git -C "$PS_DIR" rev-parse --short HEAD) の読み込み"
 cd battle
 node transpile-ps.mjs "$PS_DIR"
 node export-ps.js "$PS_DIR" ps-data.json "$(git -C "$PS_DIR" rev-parse HEAD)"
+cd ..
+
+echo "== 図鑑（技の効果と発動確率は、いま書き出した Showdown のデータを使う）"
+python etl/build_data.py
+
+echo "== バトル"
+cd battle
 node validate-teams.js "$PS_DIR" sample-teams.txt sample-teams.json
 node make-engine.mjs
 python build_battle_data.py

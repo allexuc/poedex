@@ -250,3 +250,4 @@ table.stab { width: 100%; border-collapse: collapse; font-size: 13px; }
 .mon, .pvb, .benchb, .slot, .pickbtn { min-width: 0; }
 .team h3, .slot .top, .pvb .nm, .benchb .nm, .log li, .problems, .fine { overflow-wrap: anywhere; }
 .mon .nm, .pvb .nm { word-break: keep-all; overflow-wrap: anywhere; }
+.plist .eff { display: block; font-size: 12px; font-weight: 700; color: var(--ink-2); margin-top: 1px; }

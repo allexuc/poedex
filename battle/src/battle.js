@@ -4,7 +4,8 @@
   // ---- データの配列レイアウト（build_battle_data.py の docstring と必ず一致させる） ----
   const SP_ID = 0, SP_PS = 1, SP_NUM = 2, SP_DISP = 3, SP_BASE = 4, SP_T1 = 5, SP_T2 = 6, SP_ST = 7, SP_AB = 8, SP_MV = 9, SP_REQ = 10, SP_NFE = 11,
     SP_RESTR = 12, SP_EVENT = 13, SP_PID = 14;
-  const MV_ID = 0, MV_JA = 1, MV_TYPE = 2, MV_CAT = 3, MV_BP = 4, MV_ACC = 5, MV_PP = 6, MV_PRIO = 7, MV_TGT = 8, MV_TRAIT = 9, MV_HITS = 10;
+  const MV_ID = 0, MV_JA = 1, MV_TYPE = 2, MV_CAT = 3, MV_BP = 4, MV_ACC = 5, MV_PP = 6, MV_PRIO = 7, MV_TGT = 8, MV_TRAIT = 9, MV_HITS = 10, MV_EFF = 11, MV_DROP = 12;
+  const effShort = (m, g) => { const e = m[MV_EFF]; return !e ? '' : g === 'ch' && e[1] != null ? e[1] : e[0]; };
   const MG_ITEM = 0, MG_BASE = 1, MG_DISP = 3, MG_T1 = 4, MG_T2 = 5, MG_ST = 6, MG_AB = 7, MG_PID = 8;
   const IT_ID = 0, IT_JA = 1, IT_MEGA = 2;
 
@@ -554,7 +555,7 @@
     const chosen = new Set(set.moves.filter((m, k) => k !== slot));
     const rows = [...moveSet(S.game, sp)].filter(id => !chosen.has(id)).map(id => {
       const m = mById.get(id);
-      return { key: id, name: m[MV_JA], q: norm(m[MV_JA] + id), left: tt(m[MV_TYPE]),
+      return { key: id, name: m[MV_JA], sub: effShort(m, S.game), q: norm(m[MV_JA] + id), left: tt(m[MV_TYPE]),
         right: `<span class="cls c${m[MV_CAT]}">${CAT_JA[m[MV_CAT]]}</span> ${m[MV_BP] || '—'} / ${m[MV_ACC] == null ? '—' : m[MV_ACC]}`,
         cur: set.moves[slot] === id, t: TYPE_ORDER.indexOf(m[MV_TYPE]) };
     }).sort((x, y) => x.t - y.t || collator.compare(x.name, y.name));
@@ -568,7 +569,7 @@
     const n = rows.filter(r => !r.head).length;
     let h = rows.slice(0, LIMIT_ROWS).map(r => r.head ? `<li class="hd">${esc(r.head)}</li>` :
       `<li><button type="button" data-choose="${esc(r.key)}"${r.cur ? ' aria-current="true"' : ''}>` +
-      `<span class="tts">${r.left}</span><span class="nm">${r.bm ? '<span class="bmk" aria-label="ブックマーク">★</span>' : ''}${esc(r.name)}</span><span class="rt">${r.right}</span></button></li>`).join('');
+      `<span class="tts">${r.left}</span><span class="nm">${r.bm ? '<span class="bmk" aria-label="ブックマーク">★</span>' : ''}${esc(r.name)}${r.sub ? `<span class="eff">${esc(r.sub)}</span>` : ''}</span><span class="rt">${r.right}</span></button></li>`).join('');
     if (!n) h = '<li class="fine">見つかりません</li>';
     if (rows.length > LIMIT_ROWS) h += `<li class="fine">ほか${rows.length - LIMIT_ROWS}件。名前で絞り込んでください。</li>`;
     $('pick-list').innerHTML = h;
@@ -703,7 +704,10 @@
     const top = ids.filter(id => abilRating(id) === best);
     return top[Math.floor(Math.random() * top.length)];
   }
-  function movePower(f, m, dbl) {         // 技の実質的な強さ（威力 × 一致 × 命中 × 使いやすさ）
+  // 技の実質的な強さ（威力 × 一致 × 命中 × 使いやすさ）。role を渡すと、型に合わせて技の副作用を見る
+  //   自分の能力が下がる技（オーバーヒートなど）：長く場に残る型（耐久重視・サポート）は避け、すばやさ重視（撃って引く）は少し、
+  //   両刀は もう一方の分類で戦えるのでほとんど割り引かない。同じ能力を上げる積み技とは打ち消し合うので大きく割り引く
+  function movePower(f, m, dbl, role, util) {
     const tr = m[MV_TRAIT];
     if (!m[MV_CAT] || (tr & TR.OHKO) || AVOID.has(m[MV_ID])) return 0;
     let bp = tr & TR.FIXED ? 65 : m[MV_BP];
@@ -712,17 +716,31 @@
     const id = m[MV_ID], sure = (BT.theme === 'rain' && (id === 'thunder' || id === 'hurricane')) || (BT.theme === 'snow' && id === 'blizzard');
     let p = bp * (m[MV_TYPE] === f.t1 || m[MV_TYPE] === f.t2 ? 1.5 : 1) * (m[MV_ACC] == null || sure ? 1 : m[MV_ACC] / 100) * themeMul(m);
     const noCharge = (BT.theme === 'sun' && (id === 'solarbeam' || id === 'solarblade')) || (BT.theme === 'rain' && id === 'electroshot');
+    const long = !!role && (role.kind === 'support' || !role.fast);      // 長く場に残って戦う型
     if ((tr & TR.CHARGE) && !noCharge) p *= 0.45;
     if (tr & TR.RECHARGE) p *= 0.45;
     if (tr & TR.SELFKO) p *= 0.25;
-    if (tr & TR.SELFDROP) p *= 0.9;
-    if (tr & TR.RECOIL) p *= HEAVY_RECOIL.has(m[MV_ID]) ? 0.6 : 0.93;   // HPの半分を失う技は大きく割り引く
-    if (tr & (TR.PIVOT | TR.DRAIN)) p *= 1.05;
-    if (dbl && m[MV_TGT] === 'allAdjacentFoes') p *= 1.15;
-    if (dbl && m[MV_TGT] === 'allAdjacent') p *= 0.9;
-    const tr2 = m[MV_TRAIT], stat = tr2 & TR.USEDEF ? f.stats[2] : tr2 & TR.TGTATK ? 110 : m[MV_CAT] === 1 ? f.stats[1] : f.stats[3];
+    const dr = m[MV_DROP];
+    if (dr) {
+      const own = dr[m[MV_CAT] === 1 ? 'atk' : 'spa'] || 0, df = (dr.def || 0) + (dr.spd || 0), sp = dr.spe || 0;
+      let k;
+      if (!role) k = 1 + 0.05 * own + 0.03 * df + 0.03 * sp;
+      else if (role.kind === 'mixed') k = 1 + 0.02 * own + 0.04 * df + 0.04 * sp;
+      else if (long) k = 1 + 0.15 * own + 0.08 * df + 0.03 * sp;
+      else k = 1 + 0.05 * own + 0.03 * df + 0.08 * sp;
+      if (own && util && (m[MV_CAT] === 1 ? SETUP_P : SETUP_S).includes(util)) k *= 0.6;
+      p *= Math.max(0.4, k);
+    }
+    if (tr & TR.RECOIL) p *= HEAVY_RECOIL.has(id) ? 0.6 : long ? 0.88 : 0.93;   // HPの半分を失う技は大きく割り引く
+    if (tr & TR.PIVOT) p *= 1.05;
+    if (tr & TR.DRAIN) p *= long ? 1.12 : 1.05;
+    // ダブル：相手2匹に当たる技（ふぶき・ねっぷう・いわなだれ など）を優先。味方にも当たる技（じしん など）は少しだけ
+    if (dbl && m[MV_TGT] === 'allAdjacentFoes') p *= 1.35;
+    if (dbl && m[MV_TGT] === 'allAdjacent') p *= 1.05;
+    const stat = tr & TR.USEDEF ? f.stats[2] : tr & TR.TGTATK ? 110 : m[MV_CAT] === 1 ? f.stats[1] : f.stats[3];
     return (p * stat) / 100;
   }
+
   function offense(g, f, cat, dbl) {     // その分類で「種族値 × いちばん強い技」。一致技を優先し、ほかは2割引きで見る
     let stab = 0, other = 0;
     for (const id of moveSet(g, f.sp)) {
@@ -794,29 +812,32 @@
     const legal = moveSet(g, f.sp), out = [];
     const has = id => legal.has(id);
     const add = id => { if (id && has(id) && !out.includes(id) && out.length < 4) out.push(id); };
-    const pw = m => movePower(f, m, dbl);
+    let util = '';
+    if (role.kind === 'attacker' && !dbl) {
+      // すばやさ重視は積み技、耐久重視は回復 → ステルスロック → 状態異常の技（攻撃技を選ぶ前に決め、積み技と合わない技を避ける）
+      // 両刀は4つとも攻撃技にして、物理と特殊の両方で相性の範囲を広げる
+      const setup = (role.cat === 1 ? SETUP_P : SETUP_S).find(has), rec = RECOVER.find(has);
+      const hz = has('stealthrock') ? 'stealthrock' : '', st = ['willowisp', 'thunderwave', 'toxic'].find(has);
+      util = role.fast ? setup || '' : rec || hz || setup || st || '';
+    }
+    const pw = m => movePower(f, m, dbl, role, util);
     const catOK = m => (role.kind === 'attacker' ? m[MV_CAT] === role.cat : m[MV_CAT] > 0);
     const pool = [...legal].map(id => mById.get(id)).filter(m => catOK(m) && pw(m) > 0).sort((a, b) => pw(b) - pw(a));
     if (dbl) add(['protect', 'detect'].find(has));
     if (dbl && has('fakeout') && (role.kind === 'support' || (role.kind === 'attacker' && role.cat === 1))) add('fakeout');
-    let util = '';
     if (role.kind === 'support') {
       const stab = pool.find(m => m[MV_TYPE] === f.t1 || m[MV_TYPE] === f.t2);
       if (stab) add(stab[MV_ID]);
       if (Math.max(f.stats[1], f.stats[3]) >= 100) chooseAttacks(pool.filter(m => !out.includes(m[MV_ID])), 1, f, pw).forEach(add);
       if (BT.theme && !f.setter && !dbl) add(MODES[BT.theme].move);   // 特性で起こせないときは技で天候・フィールドを起こす
       for (const id of SUPPORT[dbl ? 'doubles' : 'singles']) if (out.length < 4) add(id);
-    } else if (!dbl) {
-      // すばやさ重視は積み技、耐久重視は回復 → ステルスロック → 状態異常の技
-      const setup = (role.cat === 1 ? SETUP_P : SETUP_S).find(has), rec = RECOVER.find(has);
-      const hz = has('stealthrock') ? 'stealthrock' : '', st = ['willowisp', 'thunderwave', 'toxic'].find(has);
-      util = role.fast ? setup || '' : rec || hz || setup || st || '';
     }
     chooseAttacks(pool.filter(m => !out.includes(m[MV_ID])), 4 - out.length - (util ? 1 : 0), f, pw).forEach(add);
     add(util);
     for (const m of pool) if (out.length < 4) add(m[MV_ID]);
     return out;
   }
+
   function natureOf(role, f, moves) {
     const [, , def, , spd] = f.stats, lowDef = def <= spd ? 2 : 4, main = role.cat === 1 ? 1 : 3, unused = main === 1 ? 3 : 1;
     let up, down;
@@ -1785,6 +1806,12 @@
     if (entering) v -= 0.5 * Math.min(thr, 1);
     return v + (0.15 * mon.hp) / mon.maxhp;
   }
+  function debuffOf(mon) {                  // 攻撃に使う能力が下がっている度合い（交代すると元に戻る）
+    const dex = B.stream.battle.dex, dm = mon.moveSlots.map(ms => dex.moves.get(ms.id)).filter(mv => mv.category !== 'Status');
+    const phys = dm.filter(mv => mv.category === 'Physical').length / Math.max(1, dm.length);
+    const deb = -(Math.min(0, mon.boosts.atk) * phys + Math.min(0, mon.boosts.spa) * (1 - phys));
+    return Math.min(0.3, 0.1 * deb);
+  }
   function benchOptions(side, req, used) {
     const mons = B.stream.battle[side].pokemon;
     return req.side.pokemon.map((p, k) => ({ p, k: k + 1, mon: mons[k] }))
@@ -1858,6 +1885,13 @@
     if (id === 'wideguard' || id === 'quickguard') return dbl ? 0.15 : 0;
     return 0.12;
   }
+  function selfDropsOf(move) {              // 使ったあとに必ず下がる自分の能力
+    const bo = (move.self && !move.self.chance && move.self.boosts) || (move.selfBoost && move.selfBoost.boosts);
+    if (!bo) return null;
+    const d = {};
+    for (const k in bo) if (bo[k] < 0) d[k] = bo[k];
+    return Object.keys(d).length ? d : null;
+  }
   function scoreMove(side, slot, mon, move, t) {
     const b = B.stream.battle, foes = b[side].foe.active.map(asSeen), allies = b[side].active, dbl = B.f.gameType === 'doubles';
     const target = t == null ? foes.find(p => p && !p.fainted) : t > 0 ? foes[t - 1] : allies[-t - 1];
@@ -1869,6 +1903,15 @@
       const ally = allies[1 - slot];
       if (move.target === 'allAdjacent' && ally && !ally.fainted) s -= 0.7 * dmgFrac(mon, move, ally, true);
     } else s = dmgFrac(mon, move, target, false);
+    const dr = selfDropsOf(move);
+    if (dr && s < 1) {
+      const dex = b.dex, own = dr[move.category === 'Physical' ? 'atk' : 'spa'] || 0;
+      const mixed = mon.moveSlots.some(ms => { const mv = dex.moves.get(ms.id); return mv.category !== 'Status' && mv.category !== move.category; });
+      const bench = b[side].pokemon.some(p => !p.fainted && !p.isActive);   // 使ったあと交代できるか
+      let k = 1 + (mixed ? 0.03 : bench ? 0.08 : 0.2) * own + 0.04 * ((dr.def || 0) + (dr.spd || 0)) + 0.04 * (dr.spe || 0);
+      if (mon.hp / mon.maxhp < 0.35) k = 1 - (1 - k) * 0.3;             // 残りわずかなら、あとのことは気にしない
+      s *= Math.max(0.5, k);
+    }
     if (move.id === 'fakeout') { if (mon.activeMoveActions > 0) return 0; s += 0.35; }
     if (move.priority > 0 && s >= 1) s += 0.3;
     return s;
@@ -1936,7 +1979,7 @@
         // いまのポケモンより明らかに有利な控えがいれば交代する。前のターンに交代で出たばかりのポケモンは、すぐには戻さない
         if (!act.trapped && !act.maybeTrapped) {
           const usable = new Set(act.moves.filter(m => !m.disabled).map(m => m.id));
-          const cur = matchup(side, mon, false, usable);
+          const cur = matchup(side, mon, false, usable) - debuffOf(mon);
           const alt = benchOptions(side, req, switched).map(o => ({ k: o.k, mon: o.mon, v: matchup(side, o.mon, true) })).sort((a, b) => b.v - a.v)[0];
           const turn = B.stream.battle.turn, justIn = B.cpuIn[side + ':' + mon.name] === turn - 1;
           if (alt && alt.v - cur > 0.45 && !justIn && Math.random() < 0.85) {
@@ -2117,14 +2160,28 @@
           save();
         },
         startHuman(game, rule) { S.game = game; S.rule = rule; startBattle(); B.cpu.p1 = false; B.cpu.p2 = false; },
-        cpuBestMove(side, noIllusion) {   // noIllusion=true：相手の正体を知っているときと比べるため、イリュージョンを外して考える
+        movesFor(game, rule, ps, role) {   // 指定した型で、おまかせが選ぶ技
+          const dbl = rule === 'doubles', sp = GD[game].byPs.get(ps);
+          return pickMoves(game, formOf(game, sp, null, dbl), role, dbl);
+        },
+        cpuSwitchRate(side, n, boosts) {  // 能力変化を一時的に入れて、CPU が交代を選ぶ割合
+          const mon = B.stream.battle[side].active[0], saved = Object.assign({}, mon.boosts), st = Object.assign({}, B.cpuStats);
+          Object.assign(mon.boosts, boosts || {});
+          let k = 0;
+          try { for (let i = 0; i < n; i++) if (/^switch/.test(cpuChoice(side, B.req[side]))) k++; }
+          finally { Object.assign(mon.boosts, saved); B.cpuStats = st; B.cpuIn = {}; }
+          return k / n;
+        },
+        cpuBestMove(side, noIllusion, last) {   // noIllusion：イリュージョンを外して考える。last：控えがいない（最後の1匹）として考える
           const b = B.stream.battle, mon = b[side].active[0], foes = b[side].foe.active, saved = foes.map(p => p && p.illusion);
+          const bench = last ? b[side].pokemon.filter(p => !p.isActive && !p.fainted) : [];
+          bench.forEach(p => { p.fainted = true; });
           if (noIllusion) foes.forEach(p => { if (p) p.illusion = null; });
           try {
             const scores = B.req[side].active[0].moves.map(m => ({ id: m.id, s: scoreMove(side, 0, mon, b.dex.moves.get(m.id), null) })).sort((x, y) => y.s - x.s);
             const v = asSeen(foes[0]);
             return { best: scores[0].id, seen: { name: v.name, types: v.types } };
-          } finally { foes.forEach((p, k) => { if (p) p.illusion = saved[k]; }); }
+          } finally { foes.forEach((p, k) => { if (p) p.illusion = saved[k]; }); bench.forEach(p => { p.fainted = false; }); }
         },
         autoBoth() {
           const s = selOf(S.game, S.rule);

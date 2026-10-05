@@ -468,6 +468,41 @@ def main():
         print("  console/page errors:", errs or "なし")
         mob.close()
 
+        print("■ 技の効果と発動確率（Showdown のデータ）")
+        # データ：PokeAPI の発動確率（moves.csv の effect_chance）と、図鑑に入れた確率が食い違わない
+        import csv
+        mv = {r["id"]: r for r in csv.DictReader(open(ROOT / "cache/moves.csv", encoding="utf-8"))}
+        diff = []
+        for mid, txt in DB.execute("select id, effect_sv from moves where effect_sv like '%の確率%'"):
+            ch = mv.get(str(mid), {}).get("effect_chance")
+            if ch and f"{ch}%の確率" not in txt:
+                diff.append((mid, ch, txt))
+        n_eff = q1("select count(*) from moves where effect_sv is not null")
+        check("効果のデータがある技の数（800以上）", n_eff >= 800, True)
+        check("PokeAPI の発動確率と食い違う技", diff[:3], [])
+        mob = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+        pg, errs = open_page(mob)
+        iron = q1("select id from moves where en = 'Iron Head'")
+        pg.goto(URL + f"#/m/{iron}"); pg.wait_for_selector(".effl"); settle(pg, 200)
+        txt = pg.inner_text("#detail-view")
+        check("詳細：チャンピオンズとSVで違う確率を両方出す（アイアンヘッド）",
+              ["20%の確率で相手をひるませる" in txt, "30%の確率で相手をひるませる" in txt, "チャンピオンズでは効果や確率がSVと違います" in txt], [True, True, True])
+        tb = q1("select id from moves where en = 'Thunderbolt'")
+        pg.goto(URL + f"#/m/{tb}"); pg.wait_for_selector(".effl"); settle(pg, 200)
+        check("詳細：10まんボルトは「10%の確率で相手をまひ状態にする」", pg.locator(".effl li").all_inner_texts(), ["10%の確率で相手をまひ状態にする"])
+        pg.goto(URL + "#/"); pg.wait_for_selector("#list .row")
+        pg.tap(".tabs [data-tab='m']"); settle(pg)
+        pg.fill("#q", "アイアンヘッド"); settle(pg, 500)
+        row = lambda: pg.locator(f"#list a[href='#/m/{iron}'] .eff").inner_text()
+        check("一覧：すべてのゲームのときはSVの「ひるみ30%」", row(), "ひるみ30%")
+        pg.tap("#game-seg [data-game='sv']"); settle(pg, 400)
+        check("一覧：SVでは「ひるみ30%」", row(), "ひるみ30%")
+        pg.tap("#game-seg [data-game='ch']"); settle(pg, 400)
+        check("一覧：チャンピオンズにすると「ひるみ20%」", row(), "ひるみ20%")
+        pg.tap("#game-seg [data-game='all']"); settle(pg, 300)
+        check("  errors", errs, [])
+        mob.close()
+
         print("■ デスクトップ")
         desk = new_context(b, viewport={"width": 1280, "height": 900})
         pg, errs = open_page(desk)

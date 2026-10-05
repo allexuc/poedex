@@ -204,6 +204,60 @@ def check_overflow(b):
         ctx.close()
 
 
+ZARD = "Charizard @ Charcoal\nAbility: Blaze\nModest Nature\n- Overheat\n- Flamethrower\n\n"
+CPU_TEAM = ZARD + "Garchomp @ Life Orb\nAbility: Rough Skin\n- Earthquake\n- Dragon Claw\n\nMetagross @ Leftovers\nAbility: Clear Body\n- Meteor Mash\n- Earthquake\n"
+YOU_TEAM = ("Snorlax @ Leftovers\nAbility: Thick Fat\nCareful Nature\n- Body Slam\n\nBlastoise @ Sitrus Berry\nAbility: Torrent\n- Surf\n\n"
+            "Clefable @ Focus Sash\nAbility: Magic Guard\n- Moonblast\n")
+
+def check_move_logic(b):
+    print("■ 技の副作用と範囲を考えた技選び")
+    ctx = new_context(b, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    pg, errs = open_page(ctx, "?autotest=1")
+    mv = lambda g, r, ps, role: pg.evaluate("([g, r, ps, role]) => __bt.movesFor(g, r, ps, role)", [g, r, ps, role])
+    bulky = mv("ch", "singles", "Charizard", {"kind": "attacker", "cat": 2, "fast": False})
+    mixed = mv("ch", "singles", "Charizard", {"kind": "mixed", "cat": 2, "fast": True})
+    print("  リザードン：耐久重視", bulky, "／ 両刀", mixed)
+    check("長く戦う型（耐久重視）は オーバーヒート を避けて、ほかのほのお技", ["overheat" in bulky, any(x in bulky for x in ("fireblast", "flamethrower"))], [False, True])
+    check("両刀は オーバーヒート を使う（とくこうが下がっても物理技で戦える）", "overheat" in mixed, True)
+    nine_s = mv("ch", "singles", "Ninetales-Alola", {"kind": "attacker", "cat": 2, "fast": True})
+    nine_d = mv("ch", "doubles", "Ninetales-Alola", {"kind": "attacker", "cat": 2, "fast": True})
+    zard_d = mv("ch", "doubles", "Charizard", {"kind": "attacker", "cat": 2, "fast": True})
+    print("  アローラキュウコン：シングル", nine_s, "／ ダブル", nine_d, "／ リザードン（ダブル）", zard_d)
+    check("ダブルでは相手全体の技（ふぶき・マジカルシャイン・ねっぷう）", ["blizzard" in nine_d, "dazzlinggleam" in nine_d, "heatwave" in zard_d], [True, True, True])
+    check("シングルでは命中の高い れいとうビーム", ["icebeam" in nine_s, "blizzard" in nine_s], [True, False])
+    rate = pg.evaluate("""() => {
+      const r = {};
+      for (const rule of ['singles', 'doubles']) {
+        let n = 0, k = 0;
+        for (let i = 0; i < 15; i++) for (const s of __bt.autoTeamCheck('ch', rule).packed.split(']')) { n++; if (/blizzard|heatwave|rockslide|dazzlinggleam|hypervoice|earthquake|icywind|snarl|discharge|surf|muddywater|eruption|waterspout|bleakwindstorm|sludgewave|makeitrain|expandingforce|electroweb|breakingswipe|lavaplume|boomburst|bulldoze|matchagotcha|glaciallance|astralbarrage|precipiceblades|originpulse|springtidestorm/.test(s)) k++; }
+        r[rule] = k / n;
+      }
+      return r;
+    }""")
+    print(f"  相手全体に当たる技を持つポケモンの割合：シングル {rate['singles']:.0%}・ダブル {rate['doubles']:.0%}")
+    check("ダブルの方が、相手全体に当たる技を多く持つ", rate["doubles"] > rate["singles"] + 0.15, True)
+
+    print("■ 対戦中：自分の能力が下がる技と交代")
+    pg.evaluate("([y, o]) => { __bt.useTexts('ch', 'singles', y, o); __bt.startHuman('ch', 'singles'); }", [YOU_TEAM, CPU_TEAM])
+    pg.wait_for_selector("#b-cmd .pvb")
+    for _ in range(2):                                    # あなた・相手（どちらも人が操作する設定）の選出
+        pv = pg.locator("#b-cmd .pvb")
+        for k in range(3): pv.nth(k).tap()
+        pg.tap("[data-act='pvgo']"); pg.wait_for_timeout(300)
+    pg.wait_for_selector("#b-cmd .mvb")
+    pg.wait_for_function("__bt.state().over === false")
+    with_bench = pg.evaluate("__bt.cpuBestMove('p2')")["best"]
+    last_one = pg.evaluate("__bt.cpuBestMove('p2', false, true)")["best"]
+    print("  リザードン vs カビゴン：控えがいるとき", with_bench, "／ 最後の1匹のとき", last_one)
+    check("控えがいれば オーバーヒート（撃ってから交代できる）、最後の1匹なら かえんほうしゃ", [with_bench, last_one], ["overheat", "flamethrower"])
+    base = pg.evaluate("__bt.cpuSwitchRate('p2', 300, {})")
+    after = pg.evaluate("__bt.cpuSwitchRate('p2', 300, { spa: -2 })")
+    print(f"  交代を選ぶ割合：ふだん {base:.0%} ／ とくこうが2段階下がったあと {after:.0%}")
+    check("とくこうが下がったあとは交代を選びやすい（10ポイント以上）", after >= base + 0.10, True)
+    check("  errors", errs, [])
+    ctx.close()
+
+
 def main():
     with sync_playwright() as pw:
         b = pw.chromium.launch()
@@ -216,6 +270,7 @@ def main():
         pg.screenshot(path=str(SHOTS / "setup.png"), full_page=True)
 
         print("■ シングル（チャンピオンズ）を人が操作")
+        pg.select_option("[data-pickteam='opp']", sel_team(pg))   # 相手もサンプル（先頭はガブリアス）にして、表示を決まった形で確かめる
         pg.tap("#start")
         pg.wait_for_selector("#b-cmd .pvb")
         check("選出画面に自分の6匹が並ぶ", pg.locator("#b-cmd .pvb").count(), 6)
@@ -278,7 +333,8 @@ def main():
         pg.fill("#pick-q", "がんせき")
         rows = pg.locator("#pick-list [data-choose]")
         check("技の絞り込み（がんせき）", rows.count() >= 1, True)
-        name = rows.first.locator(".nm").inner_text()
+        name = rows.first.locator(".nm").evaluate("e => [...e.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('')")   # 効果の表記を除いた技の名前
+        check("技の名前の下に効果（がんせきふうじ：すばやさ↓100%）", rows.first.locator(".eff").inner_text(), "すばやさ↓100%")
         rows.first.tap(); pg.wait_for_selector("#s-nat")
         check("選んだ技が1番目に入る", name in pg.locator(".mvgrid a").first.inner_text(), True)
         pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
@@ -296,6 +352,22 @@ def main():
         check("相手が1匹だと開始できず理由を表示", [pg.is_enabled("#start"), "3匹以上" in pg.inner_text("#problems")], [False, True])
         pg.select_option("[data-pickteam='opp']", "auto")
         check("相手を「おまかせ」に戻すと開始できる", pg.is_enabled("#start"), True)
+        check("  errors", errs, [])
+        ctx.close()
+
+        print("■ 技を選ぶときの発動確率")
+        ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+        pg, errs = open_page(ctx)
+        pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+        pg.select_option("#nt-rule", "ch_singles")
+        pg.tap("[data-newteam='empty']"); pg.wait_for_selector("#paste")
+        tid = pg.evaluate("location.hash.split('/')[2]")
+        pg.fill("#paste", "Metagross @ Life Orb\\nAbility: Clear Body\\n- Meteor Mash\\n"); pg.tap(f"[data-import='{tid}']")
+        pg.goto(URL + f"#/set/{tid}/0/pick/move1"); pg.wait_for_selector("#pick-list li")
+        pg.fill("#pick-q", "アイアンヘッド"); pg.wait_for_timeout(300)
+        check("チャンピオンズでは「ひるみ20%」", pg.locator("#pick-list .eff").first.inner_text(), "ひるみ20%")
+        pg.fill("#pick-q", "コメットパンチ"); pg.wait_for_timeout(300)
+        check("自分の能力が上がる確率（コメットパンチ）", pg.locator("#pick-list .eff").first.inner_text(), "自分のこうげき↑20%")
         check("  errors", errs, [])
         ctx.close()
 
@@ -352,6 +424,7 @@ def main():
         check_illusion(b)
         check_cpu_illusion(b)
         check_overflow(b)
+        check_move_logic(b)
 
         print("■ おまかせ編成（画面の操作）")
         ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)

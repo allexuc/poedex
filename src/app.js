@@ -8,7 +8,7 @@
   const S_ID = 0, S_NAME = 1, S_KANA = 2, S_EN = 3, S_GENUS = 4, S_CAT = 6, S_CHAIN = 7,
     S_FROM = 8, S_LV = 9;
   const M_ID = 0, M_NAME = 1, M_KANA = 2, M_EN = 3, M_TYPE = 4, M_CLS = 5, M_POW = 6, M_ACC = 7,
-    M_PP = 8, M_PRIO = 9, M_TGT = 10, M_GEN = 11, M_DESC = 12, M_SRC = 13, M_DESC_KANA = 14;
+    M_PP = 8, M_PRIO = 9, M_TGT = 10, M_GEN = 11, M_DESC = 12, M_SRC = 13, M_DESC_KANA = 14, M_EFF = 15;
   const A_ID = 0, A_NAME = 1, A_KANA = 2, A_EN = 3, A_DESC = 4, A_GEN = 5, A_SRC = 6, A_DESC_KANA = 7;
   const N_NAME = 1, N_UP = 2, N_DOWN = 3;
   const F_ALT = 1, F_MEGA = 2, F_BATTLE = 4;
@@ -280,12 +280,22 @@
       `<span class="nm">${BM.has(p[P_ID]) ? '<span class="bmk" aria-label="ブックマーク">★</span>' : ''}${esc(p[P_NAME])}</span><span class="tot${s === 'total' ? ' on' : ''}"><small>合計</small>${totals.get(p[P_ID])}</span></div>` +
       `<div class="stats">${stats}</div></div>${thumb(p[P_T1], p[P_T2])}</a></li>`;
   }
+  // 技の効果（発動確率つき）。チャンピオンズで違う技は、ゲームの切り替えに合わせて出す
+  const effShort = m => { const e = m[M_EFF]; return !e ? '' : st.game === 'ch' && e[3] != null ? e[3] : e[2]; };
+  function effHTML(m) {
+    const e = m[M_EFF];
+    if (!e || (!e[0].length && !(e[1] && e[1].length))) return '';
+    const ul = lines => (lines.length ? `<ul class="effl">${lines.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : '<p class="fine">特になし</p>');
+    const body = e[1] == null ? ul(e[0])
+      : `<p class="effg">チャンピオンズ</p>${ul(e[1])}<p class="effg">SV</p>${ul(e[0])}<p class="fine">チャンピオンズでは効果や確率がSVと違います。</p>`;
+    return sec('効果と発動確率', body + '<p class="fine">対戦シミュレーターと同じ Pokémon Showdown のデータです。主な効果だけを載せています。</p>');
+  }
   function rowM(m) {
     const s = st.m.sort;
     const cell = (key, label, v) => `<span${s === key ? ' class="hit"' : ''}>${label}<b>${v}</b></span>`;
     return `<li class="row"><a href="#/m/${m[M_ID]}"><div class="rb"><div class="l1"><span class="nm">${esc(m[M_NAME])}</span></div>` +
       `<div class="l2">${clsTag(m[M_CLS])}${cell('power', '威力', dash(m[M_POW]))}${cell('acc', '命中', dash(m[M_ACC]))}${cell('pp', 'PP', dash(m[M_PP]))}` +
-      `${m[M_PRIO] || s === 'prio' ? cell('prio', '優先度', signed(m[M_PRIO])) : ''}</div>` +
+      `${m[M_PRIO] || s === 'prio' ? cell('prio', '優先度', signed(m[M_PRIO])) : ''}${effShort(m) ? `<span class="eff">${esc(effShort(m))}</span>` : ''}</div>` +
       `${hitSet.has(m[M_ID]) ? `<p class="ad">${esc(m[M_DESC])}</p>` : ''}</div>${thumb(m[M_TYPE], -1)}</a></li>`;
   }
   function rowA(a) {
@@ -889,6 +899,7 @@
       `${fact('分類', CLS_NAME[m[M_CLS]], true)}${fact('優先度', signed(m[M_PRIO]))}${fact('範囲', esc(TARGET[m[M_TGT]] || '—'), true)}</dl>` +
       (m[M_ACC] == null ? '<p class="fine">命中が「—」の技は、命中の判定がない技です。</p>' : ''));
     h += sec('説明', m[M_DESC] ? `<p class="desc">${esc(m[M_DESC])}</p>${srcNote(m[M_SRC])}` : '<p class="fine">説明文のデータがありません。</p>');
+    h += effHTML(m);
     h += `<section class="sec" id="lr" data-mid="${m[M_ID]}">${learnersHTML(m[M_ID])}</section>`;
     return h;
   }

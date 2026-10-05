@@ -34,6 +34,71 @@ for (const [g, rules] of Object.entries(CONF)) {
     console.error(`${g} ${rule}: ${f.name}（${f.id}）`);
   }
 }
+// ---- 技の効果と発動確率（図鑑とチーム編成で表示する。対戦シミュレーターと同じ Showdown のデータから作る） ----
+const ST_JA = { brn: 'やけど', par: 'まひ', psn: 'どく', tox: 'もうどく', slp: 'ねむり', frz: 'こおり' };
+const STAT_JA = { atk: 'こうげき', def: 'ぼうぎょ', spa: 'とくこう', spd: 'とくぼう', spe: 'すばやさ', accuracy: '命中率', evasion: '回避率' };
+const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+const frac = ([n, d]) => (n === 33 && d === 100 ? '1/3' : `${n / gcd(n, d)}/${d / gcd(n, d)}`);
+function boostText(boosts) {               // { def: -1, spd: -1 } → ぼうぎょ・とくぼうを1段階下げる
+  const by = {};
+  for (const [k, v] of Object.entries(boosts)) if (v) (by[v] = by[v] || []).push(STAT_JA[k] || k);
+  const parts = Object.entries(by).sort((a, b) => b[0] - a[0]);
+  // 2つ以上あるときは「〜を2段階上げ、〜を1段階下げる」のようにつなぐ
+  return parts.map(([v, ks], i) => `${ks.join('・')}を${Math.abs(v)}段階${v > 0 ? '上げ' : '下げ'}${i === parts.length - 1 ? 'る' : ''}`).join('、');
+}
+function boostShort(boosts) {              // { spd: -1 } → とくぼう↓
+  const ks = Object.keys(boosts).filter(k => boosts[k]);
+  if (['atk', 'def', 'spa', 'spd', 'spe'].every(k => ks.includes(k)) && new Set(ks.map(k => boosts[k])).size === 1) return '全能力' + (boosts.atk > 0 ? '↑' : '↓');
+  return Object.entries(boosts).filter(([, v]) => v).map(([k, v]) => (STAT_JA[k] || k) + (v > 0 ? '↑' : '↓').repeat(Math.min(Math.abs(v), 2))).join('・');
+}
+// 技ごとに決まった追加効果（データの形から文にできないもの）
+const RANDOM_ST = { triattack: 'やけど・まひ・こおり', direclaw: 'どく・まひ・ねむり' };
+const SPECIAL = {
+  alluringvoice: 'このターンに能力が上がった相手をこんらんさせる', burningjealousy: 'このターンに能力が上がった相手をやけど状態にする',
+  ceaselessedge: '相手の場に まきびし をまく', stoneaxe: '相手の場に ステルスロック をまく', eeriespell: '相手が最後に使った技のPPを3減らす',
+  psychicnoise: '2ターンの間、相手はHPを回復できなくなる', saltcure: '相手を しおづけ にする（毎ターン最大HPの1/8のダメージ。みず・はがねタイプは1/4）',
+  sparklingaria: '相手のやけどを治す', spiritshackle: '相手を逃げられなくする', syrupbomb: '3ターンの間、相手のすばやさを毎ターン1段階下げる',
+  throatchop: '2ターンの間、相手は音の技を使えなくなる',
+};
+function moveEffects(m) {
+  const lines = [], short = [];
+  const secs = m.secondaries || (m.secondary ? [m.secondary] : []);
+  for (const x of secs) {
+    const c = x.chance || 100, pre = c < 100 ? `${c}%の確率で` : '';
+    if (RANDOM_ST[m.id]) { lines.push(`${pre}相手を${RANDOM_ST[m.id]}のどれかの状態にする`); short.push(`${RANDOM_ST[m.id]}${c}%`); continue; }
+    if (SPECIAL[m.id]) { lines.push(pre + SPECIAL[m.id]); if (c < 100) short.push(`追加効果${c}%`); continue; }
+    if (!Object.keys(x).some(k => k !== 'chance')) continue;     // とくせい「ちからずく」のための目印だけのもの
+    if (x.status) { lines.push(`${pre}相手を${ST_JA[x.status] || x.status}状態にする`); short.push(`${ST_JA[x.status] || x.status}${c}%`); }
+    else if (x.volatileStatus === 'flinch') { lines.push(`${pre}相手をひるませる`); short.push(`ひるみ${c}%`); }
+    else if (x.volatileStatus === 'confusion') { lines.push(`${pre}相手をこんらんさせる`); short.push(`こんらん${c}%`); }
+    else if (x.boosts) { lines.push(`${pre}相手の${boostText(x.boosts)}`); short.push(`${boostShort(x.boosts)}${c}%`); }
+    else if (x.self && x.self.boosts) { lines.push(`${pre}自分の${boostText(x.self.boosts)}`); short.push(`自分の${boostShort(x.self.boosts)}${c}%`); }
+    else { lines.push(`${pre}追加効果がある`); short.push(`追加効果${c}%`); }
+  }
+  const self = ['self', 'allySide', 'allies', 'adjacentAllyOrSelf'].includes(m.target);
+  if (m.status) lines.push(`${self ? '自分' : '相手'}を${ST_JA[m.status] || m.status}状態にする`);
+  if (m.volatileStatus === 'confusion') lines.push('相手をこんらんさせる');
+  if (m.boosts) lines.push(`${self ? '自分' : '相手'}の${boostText(m.boosts)}`);
+  if (m.self && m.self.boosts) {
+    lines.push(`${m.self.chance && m.self.chance < 100 ? `${m.self.chance}%の確率で` : ''}自分の${boostText(m.self.boosts)}`);
+    if (m.self.chance && m.self.chance < 100) short.push(`自分の${boostShort(m.self.boosts)}${m.self.chance}%`);
+  }
+  if (m.selfBoost && m.selfBoost.boosts) lines.push(`自分の${boostText(m.selfBoost.boosts)}`);
+  if (m.drain) lines.push(`与えたダメージの${frac(m.drain)}だけHPを回復する`);
+  if (m.recoil) lines.push(`与えたダメージの${frac(m.recoil)}を反動で受ける`);
+  if (m.heal) lines.push(`最大HPの${frac(m.heal)}を回復する`);
+  if (m.willCrit) lines.push('必ず急所に当たる');
+  else if (m.critRatio > 1) lines.push(`急所に当たりやすい（急所ランク+${m.critRatio - 1}）`);
+  if (m.multihit) lines.push(Array.isArray(m.multihit) ? `${m.multihit[0]}〜${m.multihit[1]}回連続で攻撃する` : `${m.multihit}回連続で攻撃する`);
+  if (m.selfSwitch) lines.push('使ったあと、控えのポケモンと交代する');
+  if (m.forceSwitch) lines.push('相手を控えのポケモンと交代させる');
+  if (m.flags && m.flags.charge) lines.push('1ターン目にためて、2ターン目に攻撃する');
+  if (m.flags && m.flags.recharge) lines.push('使った次のターンは動けない');
+  if (m.ohko) lines.push('当たれば相手は一撃でひんしになる');
+  if (m.selfdestruct === 'always') lines.push('使うと自分はひんしになる');
+  return { lines, short: short.join('・') };
+}
+
 // 技の性質のビット：1 ためる 2 反動で動けない 4 自分がひんし 8 自分の能力が下がる 16 反動ダメージ 32 交代する
 // 64 威力が変わる 128 一撃必殺 256 固定ダメージ 512 ぼうぎょで攻撃 1024 相手のこうげきで攻撃 2048 HPを吸う
 function moveTraits(m) {
@@ -51,6 +116,13 @@ function moveTraits(m) {
   if (m.overrideOffensivePokemon === 'target') t |= 1024;
   if (m.drain) t |= 2048;
   return t;
+}
+// 使ったあとに必ず下がる自分の能力（オーバーヒート：{ spa: -2 }、インファイト：{ def: -1, spd: -1 } など）
+function selfDrops(m) {
+  const b = (m.self && !m.self.chance && m.self.boosts) || (m.selfBoost && m.selfBoost.boosts) || null;
+  const d = {};
+  for (const [k, v] of Object.entries(b || {})) if (v < 0) d[k] = v;
+  return Object.keys(d).length ? d : null;
 }
 // 連続技の平均の回数（2〜5回は 35/35/15/15% で平均 3.1 回）
 function expectedHits(m) {
@@ -108,7 +180,7 @@ for (const [game, fmts] of Object.entries(GAMES)) {
       const m = dex.moves.get(id);
       out.moves[id] = { name: m.name, type: m.type, category: m.category, basePower: m.basePower,
         accuracy: m.accuracy === true ? null : m.accuracy, pp: m.pp, priority: m.priority, target: m.target,
-        traits: moveTraits(m), hits: expectedHits(m) };
+        traits: moveTraits(m), hits: expectedHits(m), drops: selfDrops(m) };
     }
     for (const id of abilities) out.abilities[id] = out.abilities[id] || { name: dex.abilities.get(id).name, rating: dex.abilities.get(id).rating || 0 };
   }
@@ -137,4 +209,16 @@ for (const [game, fmts] of Object.entries(GAMES)) {
   out.games[game] = g;
   console.error(`${game}: species ${g.species.length}, items ${g.items.length}, ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
+// 技の効果：SV は第9世代の本体、チャンピオンズはチャンピオンズの mod のデータ（違うときだけ両方を持つ）
+const chDex = Dex.forFormat(Dex.formats.get(GAMES.ch.singles));
+out.effects = {};
+let effDiff = 0;
+for (const m of Dex.moves.all()) {
+  if (!m.exists || m.num <= 0 || ['CAP', 'LGPE', 'Custom'].includes(m.isNonstandard)) continue;
+  const sv = moveEffects(m), ch = moveEffects(chDex.moves.get(m.id));
+  const same = JSON.stringify(sv) === JSON.stringify(ch);
+  if (!same) effDiff++;
+  out.effects[m.id] = same ? { sv } : { sv, ch };
+}
+console.error(`技の効果: ${Object.keys(out.effects).length}件（チャンピオンズで違うもの ${effDiff}件）`);
 fs.writeFileSync(process.argv[3], JSON.stringify(out));

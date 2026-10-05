@@ -18,7 +18,9 @@ verify.py も必ず同時に直す）
           タイプは types の添字。フラグ: 1=別フォルム, 2=メガ, 4=バトル中のみ
   M[k] = [move_id, 名前, かな名, 英語名, タイプ添字, 分類(1変化/2物理/3特殊),
           威力(null), 命中(null), PP(null), 優先度, 範囲ID, 世代, 説明文, 説明文の出典,
-          かな説明文（検索専用。「すばやさ」で「素早さ」を含む説明文にも当たるようにする）]
+          かな説明文（検索専用。「すばやさ」で「素早さ」を含む説明文にも当たるようにする）,
+          効果 [SVの文の配列, チャンピオンズの文の配列（SVと同じなら null）, SVの短い表記, チャンピオンズの短い表記（同じなら null）]]
+          効果は Pokémon Showdown のデータから作る（battle/export-ps.js の moveEffects）。PokeAPI の日本語説明には確率がないため
           出典: "SwSh" 等のゲーム略称。英語で代用した場合は "EN:SV" のように先頭に EN:
   A[k] = [ability_id, 名前, かな名, 英語名, 説明文, 世代, 説明文の出典, かな説明文（検索専用）]
           日本語名が未収録の特性は 名前 = 英語名（UI 側は 名前 === 英語名 で判定する）
@@ -282,6 +284,12 @@ def main():
         o = vg_order[r["version_group_id"]]
         if key not in best or o > best[key][0]:
             best[key] = (o, r["version_group_id"], r["flavor_text"])
+    # 技の効果と発動確率（battle/ps-data.json。scripts/build_all.sh では図鑑より先に書き出す）
+    eff_path = ROOT / "battle" / "ps-data.json"
+    EFF = json.loads(eff_path.read_text(encoding="utf-8")).get("effects", {}) if eff_path.exists() else {}
+    if not EFF:
+        print("注意: battle/ps-data.json がないため、技の効果と発動確率は入りません", file=sys.stderr)
+    chance_diff = []
     M = []
     for r in rows("moves"):
         mid = r["id"]
@@ -299,8 +307,18 @@ def main():
         M.append([int(mid), mv_ja[mid], mv_kana.get(mid, ""), mv_en.get(mid, r["identifier"]),
                   tidx[int(r["type_id"])], int(r["damage_class_id"]), to_stat(r["power"]),
                   to_stat(r["accuracy"]), to_int(r["pp"]), int(r["priority"]), int(r["target_id"]),
-                  int(r["generation_id"]), desc, src, kana_desc if kana_desc != desc else ""])
+                  int(r["generation_id"]), desc, src, kana_desc if kana_desc != desc else "", None])
+        ef = EFF.get(re.sub(r"[^a-z0-9]", "", r["identifier"]))
+        if ef:
+            ch = ef.get("ch")
+            M[-1][15] = [ef["sv"]["lines"], ch["lines"] if ch else None, ef["sv"]["short"], ch["short"] if ch else None]
+            # PokeAPI の発動確率と食い違いがないか（確かめるだけ）
+            got = re.findall(r"(\d+)%の確率", " ".join(ef["sv"]["lines"]))
+            if r["effect_chance"] and got and r["effect_chance"] not in got:
+                chance_diff.append((r["identifier"], r["effect_chance"], got))
     mid_ok = {m[0] for m in M}
+    n_eff = sum(1 for m in M if m[15])
+    print(f"技の効果: {n_eff}/{len(M)}件（PokeAPI と確率が違うもの {len(chance_diff)}件{': ' + str(chance_diff[:5]) if chance_diff else ''}）")
 
     # ---- 性格（チャンピオンズでは「能力補正」） ------------------------
     nat_ja = names("nature_names", "nature_id", JA)
@@ -352,7 +370,8 @@ def main():
                          height INTEGER, weight INTEGER, gen INTEGER, flags INTEGER);
     CREATE TABLE moves(id INTEGER PRIMARY KEY, name TEXT, kana TEXT, en TEXT, type INTEGER, class INTEGER,
                        power INTEGER, accuracy INTEGER, pp INTEGER, priority INTEGER, target INTEGER,
-                       gen INTEGER, description TEXT, desc_source TEXT, description_kana TEXT);
+                       gen INTEGER, description TEXT, desc_source TEXT, description_kana TEXT,
+                       effect_sv TEXT, effect_champions TEXT);
     CREATE TABLE abilities(id INTEGER PRIMARY KEY, name TEXT, kana TEXT, en TEXT, description TEXT, gen INTEGER,
                            desc_source TEXT, description_kana TEXT);
     CREATE TABLE learnsets(game TEXT, pokemon_id INTEGER, move_id INTEGER, method INTEGER, level INTEGER);
@@ -363,7 +382,9 @@ def main():
     c.executemany("INSERT INTO efficacy VALUES(?,?,?)", [(i // 18, i % 18, f) for i, f in enumerate(eff)])
     c.executemany("INSERT INTO species VALUES(?,?,?,?,?,?,?,?,?,?)", S)
     c.executemany("INSERT INTO pokemon VALUES(" + ",".join("?" * 20) + ")", P)
-    c.executemany("INSERT INTO moves VALUES(" + ",".join("?" * 15) + ")", M)
+    eff_txt = lambda m, i: "／".join(m[15][i]) if m[15] and m[15][i] is not None else None
+    c.executemany("INSERT INTO moves VALUES(" + ",".join("?" * 17) + ")",
+                  [m[:15] + [eff_txt(m, 0), eff_txt(m, 1) if m[15] and m[15][1] is not None else eff_txt(m, 0)] for m in M])
     c.executemany("INSERT INTO abilities VALUES(?,?,?,?,?,?,?,?)", A)
     c.executemany("INSERT INTO natures VALUES(?,?,?,?)", N)
     for g, d in L.items():

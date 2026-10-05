@@ -6,7 +6,9 @@
 配列レイアウト（battle.js と必ず同時に直す）
   types[i]   = [英語名, 日本語名, 一文字]            i = 0..17（図鑑と同じ並び）、18 = ステラ（テラスタル用）
   natures[i] = [英語名, 日本語名, 上がる能力, 下がる能力]   能力は 1=A..5=S、補正なしは 0, 0
-  moves[i]   = [id, 日本語名, タイプ, 分類(0変化/1物理/2特殊), 威力, 命中(null=必中), PP, 優先度, 範囲, 性質ビット, 平均の回数]
+  moves[i]   = [id, 日本語名, タイプ, 分類(0変化/1物理/2特殊), 威力, 命中(null=必中), PP, 優先度, 範囲, 性質ビット, 平均の回数,
+                [発動確率のある効果の短い表記（SV）, チャンピオンズの表記（同じなら null）],
+                使ったあとに下がる自分の能力（{ spa: -2 } など。なければ null）]
               性質ビット：1 ためる 2 反動で動けない 4 自分がひんし 8 自分の能力が下がる 16 反動ダメージ 32 交代する
                           64 威力が変わる 128 一撃必殺 256 固定ダメージ 512 ぼうぎょで攻撃 1024 相手のこうげきで攻撃 2048 HPを吸う
   abilities[i] = [id, 日本語名, Showdown の評価（-1〜5、おまかせ編成で特性を選ぶのに使う）]
@@ -69,8 +71,10 @@ def main():
         if not ja:
             missing["moves"].append(m["name"])
         midx[mid] = len(moves)
+        ef = ps.get("effects", {}).get(mid)
         moves.append([mid, ja or m["name"], tidx[m["type"]], CAT[m["category"]], m["basePower"], m["accuracy"], m["pp"], m["priority"], m["target"],
-                      m["traits"], m["hits"]])
+                      m["traits"], m["hits"], [ef["sv"]["short"], ef["ch"]["short"] if "ch" in ef else None] if ef else ["", None],
+                      m.get("drops")])
     abilities, aidx = [], {}
     for aid in sorted(ps["abilities"]):
         ja = ab_ja.get(aid)
