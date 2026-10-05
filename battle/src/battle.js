@@ -591,7 +591,7 @@
         // 新しく入れるときは、おまかせと同じ考え方で 技・持ち物・能力ポイント などを入れておく
         const used = new Set(t.map(x => x.item).filter(Boolean));
         const mg = stone ? (G.megas || []).find(m => ITEMS[m[MG_ITEM]][IT_ID] === stone && m[MG_BASE] === ps) : null;
-        set = makeSet(S.game, formOf(S.game, sp, mg, S.rule === 'doubles'), S.rule === 'doubles', used);
+        set = makeSet(S.game, formOf(S.game, sp, mg, S.rule === 'doubles'), S.rule === 'doubles', used, teamForms(t.filter((x, k) => k !== i), S.game));
       }
       if (stone) set.item = stone;
       t[i] = set;
@@ -657,7 +657,10 @@
       ben: {}, mv: [] },
   };
   const MODE_BY_MOVE = Object.fromEntries(Object.entries(MODES).map(([k, m]) => [m.move, k]));
-  const BT = { theme: '' };                  // おまかせで組んでいる最中のテーマ
+  const BT = { theme: '', dbl: false };      // おまかせで組んでいる最中のテーマ・ダブルかどうか
+  // ダブルで、味方にも当たる全体技（じしん・なみのり・ほうでん など）を受けないか。
+  // f は { t1, t2, ability }（タイプの添字と特性の id）。タイプで無効・特性で無効（ふゆう・ちょすい など）・テレパシー
+  const allySafe = (f, t) => f.ability === 'telepathy' || defMult(f, t) === 0;
   function benefitOf(ability, types, moves, mode) {   // その天候・フィールドで どれだけ強くなるか（0〜1.5 くらい）
     const M = MODES[mode];
     let v = M.ben[ability] || 0;
@@ -707,7 +710,7 @@
   // 技の実質的な強さ（威力 × 一致 × 命中 × 使いやすさ）。role を渡すと、型に合わせて技の副作用を見る
   //   自分の能力が下がる技（オーバーヒートなど）：長く場に残る型（耐久重視・サポート）は避け、すばやさ重視（撃って引く）は少し、
   //   両刀は もう一方の分類で戦えるのでほとんど割り引かない。同じ能力を上げる積み技とは打ち消し合うので大きく割り引く
-  function movePower(f, m, dbl, role, util) {
+  function movePower(f, m, dbl, role, util, mates) {
     const tr = m[MV_TRAIT];
     if (!m[MV_CAT] || (tr & TR.OHKO) || AVOID.has(m[MV_ID])) return 0;
     let bp = tr & TR.FIXED ? 65 : m[MV_BP];
@@ -736,7 +739,11 @@
     if (tr & TR.DRAIN) p *= long ? 1.12 : 1.05;
     // ダブル：相手2匹に当たる技（ふぶき・ねっぷう・いわなだれ など）を優先。味方にも当たる技（じしん など）は少しだけ
     if (dbl && m[MV_TGT] === 'allAdjacentFoes') p *= 1.35;
-    if (dbl && m[MV_TGT] === 'allAdjacent') p *= 1.05;
+    if (dbl && m[MV_TGT] === 'allAdjacent') {
+      // 味方にも当たる技：仲間がわかっていれば、受けられる仲間がいるか（ひこう・ふゆう・ちょすい など）で変える
+      const safe = mates && mates.some(o => o !== f && allySafe(o, m[MV_TYPE]));
+      p *= !mates ? 1.05 : safe ? 1.2 : 0.85;
+    }
     const stat = tr & TR.USEDEF ? f.stats[2] : tr & TR.TGTATK ? 110 : m[MV_CAT] === 1 ? f.stats[1] : f.stats[3];
     return (p * stat) / 100;
   }
@@ -763,6 +770,20 @@
     f.bst = bst;
     f.setter = !!BT.theme && MODES[BT.theme].ab.includes(f.ability);
     f.bt = BT.theme ? benefitOf(f.ability, [f.t1, f.t2], moveSet(g, sp), BT.theme) : 0;
+    // ダブル：タイプごとにいちばん強い技が「味方にも当たる全体技」なら、そのタイプを覚えておく（一致タイプと、じめん技）
+    f.allyTypes = [];
+    if (dbl) {
+      const best = {};
+      for (const id of moveSet(g, sp)) {
+        const m = mById.get(id), p = movePower(f, m, dbl);
+        if (p > 0 && (!best[m[MV_TYPE]] || p > best[m[MV_TYPE]].p)) best[m[MV_TYPE]] = { m, p };
+      }
+      const top = Math.max(0, ...Object.values(best).map(x => x.p));
+      for (const t of [f.t1, f.t2, 4]) {
+        const x = t >= 0 && best[t];
+        if (x && x.m[MV_TGT] === 'allAdjacent' && x.p >= 0.6 * top && !f.allyTypes.includes(t)) f.allyTypes.push(t);
+      }
+    }
     return f;
   }
   function decideRole(g, f, dbl) {
@@ -808,7 +829,7 @@
     }
     return chosen.map(m => m[MV_ID]);
   }
-  function pickMoves(g, f, role, dbl) {
+  function pickMoves(g, f, role, dbl, mates) {
     const legal = moveSet(g, f.sp), out = [];
     const has = id => legal.has(id);
     const add = id => { if (id && has(id) && !out.includes(id) && out.length < 4) out.push(id); };
@@ -820,9 +841,14 @@
       const hz = has('stealthrock') ? 'stealthrock' : '', st = ['willowisp', 'thunderwave', 'toxic'].find(has);
       util = role.fast ? setup || '' : rec || hz || setup || st || '';
     }
-    const pw = m => movePower(f, m, dbl, role, util);
+    const pw = m => movePower(f, m, dbl, role, util, mates);
     const catOK = m => (role.kind === 'attacker' ? m[MV_CAT] === role.cat : m[MV_CAT] > 0);
-    const pool = [...legal].map(id => mById.get(id)).filter(m => catOK(m) && pw(m) > 0).sort((a, b) => pw(b) - pw(a));
+    let pool = [...legal].map(id => mById.get(id)).filter(m => catOK(m) && pw(m) > 0).sort((a, b) => pw(b) - pw(a));
+    if (dbl && mates) {
+      // ダブル：味方にも当たる全体技（じしん・なみのり など）は、受けられる仲間がいないなら使わない（ほかの攻撃技が足りないときだけ残す）
+      const rest = pool.filter(m => m[MV_TGT] !== 'allAdjacent' || mates.some(o => o !== f && allySafe(o, m[MV_TYPE])));
+      if (rest.length >= 3) pool = rest;
+    }
     if (dbl) add(['protect', 'detect'].find(has));
     if (dbl && has('fakeout') && (role.kind === 'support' || (role.kind === 'attacker' && role.cat === 1))) add('fakeout');
     if (role.kind === 'support') {
@@ -904,7 +930,10 @@
     for (let d = 0; d < 18; d++) if (fs.some(f => M[f.t1][d] >= 2 || (f.t2 >= 0 && M[f.t2][d] >= 2))) hit++;
     const types = fs.flatMap(f => [f.t1, f.t2].filter(t => t >= 0)), dup = types.length - new Set(types).size;
     const theme = BT.theme ? 0.35 * Math.min(3, fs.reduce((a, f) => a + (f.bt || 0), 0)) + (fs.some(f => f.setter) ? 0.5 : 0) : 0;
-    return fs.reduce((s, f) => s + f.q, 0) + 2.5 * c.ratio - 0.6 * c.stack + 0.05 * hit - 0.25 * dup + theme;
+    // ダブル：じしん・なみのり などの使い手には、その技を受けない仲間（ひこうタイプ・ふゆう・ちょすい など）を組ませる
+    let ally = 0;
+    if (BT.dbl) for (const f of fs) for (const t of f.allyTypes || []) ally += fs.some(o => o !== f && allySafe(o, t)) ? 0.35 : -0.2;
+    return fs.reduce((s, f) => s + f.q, 0) + 2.5 * c.ratio - 0.6 * c.stack + 0.05 * hit - 0.25 * dup + theme + ally;
   }
   function weightedPick(arr, w) {
     const ws = arr.map(w), tot = ws.reduce((a, b) => a + b, 0);
@@ -912,8 +941,8 @@
     for (let i = 0; i < arr.length; i++) { r -= ws[i]; if (r <= 0) return arr[i]; }
     return arr[arr.length - 1];
   }
-  function makeSet(g, f, dbl, used) {      // 1匹分：型 → 技 → 持ち物 → 性格・能力ポイント
-    const G = GD[g], role = decideRole(g, f, dbl), moves = pickMoves(g, f, role, dbl);
+  function makeSet(g, f, dbl, used, mates) {   // 1匹分：型 → 技 → 持ち物 → 性格・能力ポイント（mates：同じチームの仲間）
+    const G = GD[g], role = decideRole(g, f, dbl), moves = pickMoves(g, f, role, dbl, mates);
     const item = pickItem(g, f, role, moves, used, dbl);
     if (item) used.add(item);
     const ivs = [31, 31, 31, 31, 31, 31];
@@ -938,7 +967,8 @@
     // 6割くらいのチームは、天候・フィールドを軸にする（起こす役を1匹入れ、その天候で強くなる仲間を優先する）
     const modes = availableModes(g);
     BT.theme = modes.length && Math.random() < 0.6 ? modes[Math.floor(Math.random() * modes.length)] : '';
-    try { return buildTeam(g, rule); } finally { BT.theme = ''; }
+    BT.dbl = rule === 'doubles';
+    try { return buildTeam(g, rule); } finally { BT.theme = ''; BT.dbl = false; }
   }
   function buildTeam(g, rule) {
     const G = GD[g], dbl = rule === 'doubles';
@@ -969,7 +999,7 @@
       if (sc > bestS) { bestS = sc; best = team; }
     }
     const used = new Set();
-    return best.map(f => makeSet(g, f, dbl, used));
+    return best.map(f => makeSet(g, f, dbl, used, best));
   }
 
   function teamForms(t, g) {              // 表示用：メガストーンを持つポケモンはメガシンカ後の姿で見る
@@ -1901,7 +1931,8 @@
     if (dbl && (move.target === 'allAdjacentFoes' || move.target === 'allAdjacent')) {
       for (const p of foes) s += dmgFrac(mon, move, p, true);
       const ally = allies[1 - slot];
-      if (move.target === 'allAdjacent' && ally && !ally.fainted) s -= 0.7 * dmgFrac(mon, move, ally, true);
+      const shielded = ally && (ally.ability === 'telepathy' || (move.type === 'Ground' && ally.item === 'airballoon'));
+      if (move.target === 'allAdjacent' && ally && !ally.fainted && !shielded) s -= 0.7 * dmgFrac(mon, move, ally, true);
     } else s = dmgFrac(mon, move, target, false);
     const dr = selfDropsOf(move);
     if (dr && s < 1) {
@@ -1929,6 +1960,41 @@
     const opts = benchOptions(side, req, used).map(o => ({ k: o.k, v: matchup(side, o.mon, false) })).sort((a, b) => b.v - a.v);
     return opts.length ? opts[0].k : null;
   }
+  // ダブルの選出：じしん・なみのり など味方にも当たる技の使い手を選ぶときは、その技を受けない仲間も選ぶ。
+  // 使い手が先発なら、もう1匹の先発も受けない仲間にする（idx は選出の順。先頭 n 匹を選ぶ）
+  function pairAllySafe(req, idx, n, isMega) {
+    const dex = B.stream.battle.dex, mons = req.side.pokemon;
+    const hitTypes = k => [...new Set((mons[k - 1].moves || []).map(id => dex.moves.get(id))
+      .filter(m => m.exists && m.category !== 'Status' && m.target === 'allAdjacent').map(m => m.type))];
+    const safe = (k, type) => {
+      const p = mons[k - 1], name = p.details.split(',')[0], sp = dex.species.get(name), ab = toID(p.baseAbility || p.ability || '');
+      if (ab === 'telepathy' || (ABSORB[type] || []).includes(ab) || (type === 'Ground' && toID(p.item) === 'airballoon') || !dex.getImmunity(type, sp.types)) return true;
+      // メガストーンを持っていれば、メガシンカ後の姿でも見る（メガガブリアスZ・メガマフォクシー は ふゆう など）
+      const st = dex.items.get(p.item).megaStone, mg = st && st[name] && dex.species.get(st[name]);
+      return !!mg && ((ABSORB[type] || []).includes(toID(mg.abilities[0])) || !dex.getImmunity(type, mg.types));
+    };
+    for (let i = 0; i < n; i++) {
+      for (const ty of hitTypes(idx[i])) {
+        const pick = idx.slice(0, n);
+        if (pick.some(o => o !== idx[i] && safe(o, ty))) continue;
+        const j = idx.findIndex((o, x) => x >= n && safe(o, ty));
+        if (j < 0) continue;
+        // 入れ替えるのは、選出の後ろの方で、使い手でも メガストーン持ちでもないポケモン
+        let r = n - 1;
+        while (r >= 0 && (r === i || isMega(idx[r]) || hitTypes(idx[r]).length)) r--;
+        if (r < 0) continue;
+        [idx[r], idx[j]] = [idx[j], idx[r]];
+      }
+    }
+    for (const a of [0, 1]) {                // 先発の2匹
+      const b = 1 - a;
+      for (const ty of hitTypes(idx[a])) {
+        if (safe(idx[b], ty)) continue;
+        const j = idx.findIndex((o, x) => x >= 2 && x < n && safe(o, ty));
+        if (j >= 0) [idx[b], idx[j]] = [idx[j], idx[b]];
+      }
+    }
+  }
   function cpuChoice(side, req) {
     try {
       if (req.teamPreview) {
@@ -1952,6 +2018,7 @@
           if (b < 0) break;
           [idx[a], idx[b]] = [idx[b], idx[a]];
         }
+        if (B.f.gameType === 'doubles') pairAllySafe(req, idx, n, isMega);
         return 'team ' + idx.join('');
       }
       if (req.forceSwitch) {
@@ -2135,7 +2202,7 @@
         if (t.sets.length >= 6) return { ok: false, msg: `「${t.name}」にはもう6匹います` };
         if (t.sets.some(x => G.byPs.get(x.sp)[SP_NUM] === hit.sp[SP_NUM])) return { ok: false, msg: `「${t.name}」にはもう${hit.sp[SP_BASE]}がいます` };
         const used = new Set(t.sets.map(x => x.item).filter(Boolean)), dbl = t.rule === 'doubles';
-        t.sets.push(makeSet(t.game, formOf(t.game, hit.sp, hit.mega, dbl), dbl, used));
+        t.sets.push(makeSet(t.game, formOf(t.game, hit.sp, hit.mega, dbl), dbl, used, teamForms(t.sets, t.game)));
         save();
         return { ok: true, id: t.id, msg: `「${t.name}」に${hit.mega ? hit.mega[MG_DISP] : hit.sp[SP_DISP]}を入れました（${t.sets.length}/6）` };
       },
@@ -2147,9 +2214,11 @@
         start(game, rule) { S.game = game; S.rule = rule; startBattle(); },
         setRule(game, rule) { S.game = game; S.rule = rule; },
         fakeRequest(side, req) {       // 検証用：指定した要求を画面に出し、送った選択を記録する
-          B.over = false; B.cpu.p1 = B.cpu.p2 = false; B.req.p1 = B.req.p2 = null;
-          B.req[side] = req; B.done[side] = false; B.ui = null; B.err[side] = '';
-          window.__sent = null; B.ps[side].write = c => { window.__sent = c; };
+          // 動いている対戦から切り離した状態を作る（元の対戦の処理は止まるので、裏で進んだ対戦に画面を上書きされない）
+          B = Object.assign({}, B, { over: false, cpu: { p1: false, p2: false }, req: { p1: null, p2: null }, done: { p1: false, p2: false },
+            err: { p1: '', p2: '' }, ui: null, ps: { p1: { write: c => { window.__sent = c; } }, p2: { write: c => { window.__sent = c; } } } });
+          B.req[side] = req;
+          window.__sent = null;
           renderCmd();
         },
         useTexts(game, rule, youText, oppText) {
@@ -2163,6 +2232,11 @@
         movesFor(game, rule, ps, role) {   // 指定した型で、おまかせが選ぶ技
           const dbl = rule === 'doubles', sp = GD[game].byPs.get(ps);
           return pickMoves(game, formOf(game, sp, null, dbl), role, dbl);
+        },
+        cpuPreviews(side, n) {            // 選出（チームプレビュー）を n 回考えさせて、その結果を返す
+          const out = [];
+          for (let i = 0; i < n; i++) out.push(cpuChoice(side, B.req[side]));
+          return out;
         },
         cpuSwitchRate(side, n, boosts) {  // 能力変化を一時的に入れて、CPU が交代を選ぶ割合
           const mon = B.stream.battle[side].active[0], saved = Object.assign({}, mon.boosts), st = Object.assign({}, B.cpuStats);
