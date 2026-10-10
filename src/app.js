@@ -538,6 +538,10 @@
     return calcStat(calc.mode, i, p[P_ST + i], ch ? 50 : calc.level, ch ? 31 : calc.iv[i],
       inv == null ? invArr()[i] : inv, calc.up, calc.down);
   }
+  function reachOf(i, sum) {                // 合計の上限から見て、この能力に振れるいちばん大きい値
+    const lim = LIMIT[calc.mode];
+    return Math.max(0, Math.min(lim.max, lim.total - ((sum == null ? totalInv() : sum) - invArr()[i])));
+  }
   function minInvSame(p, i, inv) {       // 同じ実数値になる、いちばん少ない振り方
     const s = statOf(p, i, inv);
     let m = inv;
@@ -604,21 +608,23 @@
         '<button type="button" class="chip" data-ivp="31">すべて31</button>' +
         '<button type="button" class="chip" data-ivp="a0">Aだけ0</button><button type="button" class="chip" data-ivp="s0">Sだけ0</button></div></div>';
     }
-    h += `<div class="scroll-x"><table class="ctab"><thead><tr><th class="l">能力</th>${ch ? '' : '<th>個体値</th>'}` +
-      `<th colspan="3">${word}</th><th class="r">実数値</th></tr></thead><tbody>`;
+    const full = ch ? '能力ポイント' : '努力値', lim = LIMIT[calc.mode];
+    h += `<div class="evh${ch ? '' : ' iv'}" aria-hidden="true"><span>能力</span>${ch ? '' : '<span>個体値</span>'}<span>${word}</span><span>実数値</span></div><div class="evl">`;
     for (let i = 0; i < 6; i++) {
-      h += `<tr><td class="lab"><b>${STAT_KEYS[i]}</b>${STAT_NAMES[i]}<span class="nm" id="c-nm-${i}"></span></td>` +
-        (ch ? '' : `<td><input class="nin" type="text" inputmode="numeric" maxlength="2" data-iv="${i}" value="${calc.iv[i]}" aria-label="${STAT_NAMES[i]}の個体値"></td>`) +
-        `<td class="st"><button type="button" class="stp" data-step="-1" data-i="${i}" aria-label="${STAT_NAMES[i]}の実数値を下げる">−</button></td>` +
-        `<td><input class="nin" type="text" inputmode="numeric" maxlength="3" data-inv="${i}" value="${invArr()[i]}" aria-label="${STAT_NAMES[i]}の${word}"></td>` +
-        `<td class="st"><button type="button" class="stp" data-step="1" data-i="${i}" aria-label="${STAT_NAMES[i]}の実数値を上げる">＋</button></td>` +
-        `<td class="out" id="c-out-${i}"></td></tr>`;
+      h += `<div class="evr"><div class="l1${ch ? '' : ' iv'}"><span class="lab"><b>${STAT_KEYS[i]}</b>${STAT_NAMES[i]}<span class="nm" id="c-nm-${i}"></span></span>` +
+        (ch ? '' : `<input class="nin" type="text" inputmode="numeric" maxlength="2" data-iv="${i}" value="${calc.iv[i]}" aria-label="${STAT_NAMES[i]}の個体値">`) +
+        `<span class="num" id="c-inv-${i}" data-inv="${i}">${invArr()[i]}</span><span class="out" id="c-out-${i}"></span></div>` +
+        `<div class="l2"><button type="button" class="stp" data-step="-1" data-i="${i}" aria-label="${STAT_NAMES[i]}の実数値を下げる">−</button>` +
+        `<div class="evs" role="slider" tabindex="0" data-sl="${i}" data-unit="${ch ? 1 : 4}" aria-label="${STAT_NAMES[i]}の${full}" ` +
+        `aria-valuemin="0" aria-valuemax="${lim.max}" aria-valuenow="${invArr()[i]}"><span class="tr"><span class="th"></span></span></div>` +
+        `<button type="button" class="stp" data-step="1" data-i="${i}" aria-label="${STAT_NAMES[i]}の実数値を上げる">＋</button>` +
+        `<button type="button" class="mx" data-max="${i}" aria-label="${STAT_NAMES[i]}の${full}を最大にする">最大</button></div></div>`;
     }
-    h += '</tbody></table></div><p class="ctotal" id="c-total"></p><p class="fine" id="c-waste" hidden></p>' +
+    h += '</div><p class="ctotal" id="c-total"></p><p class="fine" id="c-waste" hidden></p>' +
       '<div class="tiers" id="c-tiers"></div><div class="tiers" id="c-bulk"></div>';
-    h += ch
-      ? '<p class="fine">チャンピオンズには個体値がなく、Lv.50で計算します。能力ポイントは1つにつき実数値が1上がります（1つの能力に32まで、合計66まで）。</p>'
-      : '<p class="fine">＋／−は、実数値が1つ変わるところまで努力値を動かします。</p>';
+    h += `<p class="fine">バーはタップした位置に合わせて動き、横になぞると細かく動きます。＋／−は実数値が1つ変わるところまで、` +
+      `「最大」は合計の残りの範囲でいちばん多く振ります。点線の部分は、合計の上限を超えるので振れません。</p>`;
+    if (ch) h += '<p class="fine">チャンピオンズには個体値がなく、Lv.50で計算します。能力ポイントは1つにつき実数値が1上がります（1つの能力に32まで、合計66まで）。</p>';
     return h;
   }
   function tiersHTML(p) {
@@ -633,8 +639,7 @@
     return `<span class="tl">すばやさの目安（Lv.${lv}）</span>` +
       rows.map(([k, v, t]) => `<span class="tv" title="${t}">${k}<b>${v}</b></span>`).join('');
   }
-  function syncCalcInputs() {
-    for (const el of els.detail.querySelectorAll('[data-inv]')) el.value = invArr()[+el.dataset.inv];
+  function syncCalcInputs() {               // 入力欄（個体値・レベル）の表示を、いまの値にそろえる
     for (const el of els.detail.querySelectorAll('[data-iv]')) el.value = calc.iv[+el.dataset.iv];
     const lv = $('c-lv');
     if (lv) lv.value = calc.level;
@@ -652,10 +657,13 @@
     const box = $('calc');
     if (!box) return;
     const p = PI.get(+box.dataset.pid), lim = LIMIT[calc.mode], word = isCh() ? '能力ポイント' : '努力値';
-    const vals = [];
+    const vals = [], inv = invArr(), sum = totalInv();
     for (let i = 0; i < 6; i++) {
       const v = statOf(p, i);
       vals.push(v);
+      const num = $('c-inv-' + i), sl = box.querySelector(`[data-sl="${i}"]`);
+      if (num) num.textContent = inv[i];
+      if (sl) setSlider(sl, inv[i], reachOf(i, sum), `${inv[i]}（実数値 ${v}）`);
       const mark = i && calc.up !== calc.down ? (calc.up === i ? 'up' : calc.down === i ? 'down' : '') : '';
       const out = $('c-out-' + i), nm = $('c-nm-' + i);
       out.textContent = v;
@@ -692,7 +700,7 @@
     if (pr) {
       const v = pr.dataset.preset === '0' ? [0, 0, 0, 0, 0, 0] : PRESETS[calc.mode][pr.dataset.preset].slice();
       if (isCh()) calc.sp = v; else calc.ev = v;
-      saveCalc(); syncCalcInputs(); refreshCalc();
+      saveCalc(); refreshCalc();
       return true;
     }
     const ivp = e.target.closest('[data-ivp]');
@@ -708,10 +716,75 @@
       const i = +stp.dataset.i, dir = +stp.dataset.step, nv = stepInv(p, i, dir);
       if (nv === invArr()[i] && dir > 0) flash($('c-total'));   // 上限で増やせない
       invArr()[i] = nv;
-      saveCalc(); syncCalcInputs(); refreshCalc();
+      saveCalc(); refreshCalc();
+      return true;
+    }
+    const mx = e.target.closest('[data-max]');
+    if (mx) {                                 // 1つの能力の最大（合計の残りが足りなければ、残りの分だけ）
+      const i = +mx.dataset.max, cur = invArr()[i], reach = reachOf(i);
+      if (reach > cur) { invArr()[i] = reach; saveCalc(); refreshCalc(); }
+      else if (cur < LIMIT[calc.mode].max) flash($('c-total'));
       return true;
     }
     return false;
+  }
+  function onCalcSlide(el, v, moving) {      // バーを動かしたとき（合計の上限を超える分は、点線のところで止める）
+    const i = +el.dataset.sl, cur = invArr()[i], reach = reachOf(i);
+    if (v > reach) { if (!moving && cur >= reach) flash($('c-total')); v = reach; }
+    if (v === cur) return;
+    invArr()[i] = v;
+    saveCalc(); refreshCalc();
+  }
+  // ---- 振り分けのバー（図鑑の実数値とチームの編集で同じしくみ。app.js と battle.js に同じものがある） ----
+  // タップした位置に合わせる・横になぞると動く・キー（← → Home End）でも動かせる。
+  // 縦にスクロールしようとして触れたときは値を変えない（touch-action: pan-y。指を離したときか、横に動かしたときに初めて変える）
+  function sliderAt(el, x) {
+    const r = el.querySelector('.tr').getBoundingClientRect(), max = +el.getAttribute('aria-valuemax'), unit = +el.dataset.unit || 1;
+    const t = r.width ? Math.max(0, Math.min(1, (x - r.left) / r.width)) : 0;
+    return Math.min(max, Math.round((t * max) / unit) * unit);
+  }
+  function setSlider(el, v, reach, text) {     // reach：合計の上限から見て、この能力に振れるいちばん大きい値
+    const max = +el.getAttribute('aria-valuemax') || 1;
+    el.style.setProperty('--v', (100 * Math.min(v, max)) / max + '%');
+    el.style.setProperty('--r', (100 * Math.min(max, Math.max(v, reach))) / max + '%');
+    el.setAttribute('aria-valuenow', v);
+    el.setAttribute('aria-valuetext', text);
+  }
+  function bindSliders(root, onValue) {         // onValue(バー, 値, なぞっている途中か)
+    let drag = null;
+    root.addEventListener('pointerdown', e => {
+      const el = e.target.closest('.evs');
+      if (!el || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      drag = { el, id: e.pointerId, x: e.clientX, y: e.clientY, on: e.pointerType === 'mouse' };
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* 捕まえられなくても動く */ }
+      if (drag.on) { e.preventDefault(); el.focus(); el.classList.add('drag'); onValue(el, sliderAt(el, e.clientX), false); }
+    });
+    root.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = Math.abs(e.clientX - drag.x), dy = Math.abs(e.clientY - drag.y);
+      if (!drag.on && dx > 6 && dx > dy) { drag.on = true; drag.el.classList.add('drag'); }
+      if (drag.on) onValue(drag.el, sliderAt(drag.el, e.clientX), true);
+    });
+    const end = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      // タップ（ほとんど動かさずに離した）なら、その位置に合わせる
+      if (e.type === 'pointerup' && !drag.on && Math.abs(e.clientY - drag.y) < 10) onValue(drag.el, sliderAt(drag.el, e.clientX), false);
+      drag.el.classList.remove('drag');
+      drag = null;
+    };
+    root.addEventListener('pointerup', end);
+    root.addEventListener('pointercancel', end);
+    root.addEventListener('keydown', e => {
+      const el = e.target.closest && e.target.closest('.evs');
+      if (!el) return;
+      const unit = +el.dataset.unit || 1, now = +el.getAttribute('aria-valuenow'), max = +el.getAttribute('aria-valuemax');
+      const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+      // 1目盛り（努力値は4）ずつ。目盛りからずれた値（読み込んだ 6 など）は、まず目盛りにそろえる
+      const v = d ? (d > 0 ? Math.floor(now / unit) * unit + unit : Math.ceil(now / unit) * unit - unit) : e.key === 'Home' ? 0 : e.key === 'End' ? max : null;
+      if (v == null) return;
+      e.preventDefault();
+      onValue(el, Math.max(0, Math.min(max, v)), false);
+    });
   }
   // 全角数字（日本語入力のまま打った場合）も受け付ける
   const digitsOf = el => String(el.value).normalize('NFKC').replace(/[^0-9]/g, '');
@@ -720,7 +793,6 @@
     let max;
     if (el.id === 'c-lv') { max = 100; calc.level = Math.max(1, Math.min(max, n)); syncLevelChips(); }
     else if (el.dataset.iv != null) { max = 31; calc.iv[+el.dataset.iv] = Math.min(max, n); }
-    else if (el.dataset.inv != null) { max = LIMIT[calc.mode].max; invArr()[+el.dataset.inv] = Math.min(max, n); }
     else return;
     if (n > max) el.value = max;        // 上限を超えた入力はその場で上限に直す
     saveCalc(); refreshCalc();
@@ -1106,14 +1178,7 @@
       calc.up = u; calc.down = d;
       saveCalc(); refreshCalc();
     });
-    els.detail.addEventListener('keydown', e => {
-      const el = e.target;
-      if (el.dataset.inv == null || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
-      e.preventDefault();
-      const i = +el.dataset.inv;
-      invArr()[i] = stepInv(PI.get(+$('calc').dataset.pid), i, e.key === 'ArrowUp' ? 1 : -1);
-      saveCalc(); syncCalcInputs(); refreshCalc();
-    });
+    bindSliders(els.detail, onCalcSlide);
     document.addEventListener('keydown', e => {
       const tag = (document.activeElement && document.activeElement.tagName) || '';
       if (inBattle()) return;

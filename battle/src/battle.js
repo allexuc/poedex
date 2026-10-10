@@ -131,7 +131,7 @@
   // ---- 状態（ルール・チーム） -------------------------------------------
   // チームは何個でも持てる：teams = [{ id, name, game, rule, sets }]。
   // 対戦ではルールごとに sel[ゲーム_形式] = { you: チームID, opp: チームID か 'auto'（おまかせ）} を使う
-  const S = { game: 'ch', rule: 'singles', cpu: true, teams: [], sel: {}, autoPrev: {}, autoUsed: {}, simTeam: '', simN: 30 };
+  const S = { game: 'ch', rule: 'singles', cpu: true, teams: [], sel: {}, autoPrev: {}, autoUsed: {}, simTeam: '', simN: 30, records: {} };
   const key = () => S.game + '_' + S.rule;
   const fmtInfo = () => D.games[S.game].formats[S.rule];
   const gd = () => GD[S.game];
@@ -217,6 +217,119 @@
     if (side === 'you') return teamById(s.you).sets;
     return s.opp === 'auto' ? autoPreview(S.game, S.rule) : teamById(s.opp).sets;
   }
+  // ---- 編成ごとの戦績 ---------------------------------------------------------------
+  // S.records[チームID] = { fp, play, sim }。play は対戦（あなたが操作したもの）、sim は連戦（CPU どうし）。
+  // fp は記録したときの編成。ポケモン・技・持ち物・特性・性格・能力ポイント・個体値・テラスタイプのどれかが違えば、
+  // その戦績は今の編成のものではないので消す（チームの名前・並び順・技の順番は戦いに関係しないので見ない）
+  function teamFp(t) {
+    const G = GD[t.game];
+    return JSON.stringify(t.sets.map(x => JSON.stringify([x.sp, x.item || '', x.ability || '', (x.moves || []).slice().sort(), x.nature || '',
+      (x.evs || []).slice(), G.statPoints ? 0 : (x.ivs || []).slice(), G.tera ? x.tera || '' : ''])).sort());
+  }
+  const newStat = () => ({ n: 0, win: 0, lose: 0, tie: 0, turns: 0, mine: {}, recent: [] });
+  function cleanStat(x) {                   // 保存されていた戦績の形を確かめる
+    const st = newStat(), num = v => (Number.isFinite(v) && v >= 0 ? v : 0);
+    if (!x || typeof x !== 'object') return st;
+    for (const k of ['n', 'win', 'lose', 'tie', 'turns']) st[k] = num(x[k]);
+    for (const name in (x.mine && typeof x.mine === 'object' && x.mine) || {}) {
+      const m = x.mine[name] || {};
+      st.mine[name] = { pick: num(m.pick), lead: num(m.lead), win: num(m.win), ko: num(m.ko), fnt: num(m.fnt) };
+    }
+    st.recent = (Array.isArray(x.recent) ? x.recent : []).filter(e => e && typeof e === 'object').slice(0, 20);
+    return st;
+  }
+  function recOf(t, create) {               // 今の編成の戦績。編成が記録したときと変わっていれば、ここで消す
+    if (!t) return null;
+    const fp = teamFp(t);
+    if (S.records[t.id] && S.records[t.id].fp !== fp) { delete S.records[t.id]; save(); }
+    if (!S.records[t.id] && create) S.records[t.id] = { fp, play: newStat(), sim: newStat() };
+    return S.records[t.id] || null;
+  }
+  const baseOf = (t, x) => GD[t.game].byPs.get(x.sp)[SP_BASE];
+  const dispOfBase = (t, name) => { const x = t.sets.find(y => baseOf(t, y) === name); return x ? GD[t.game].byPs.get(x.sp)[SP_DISP] : name; };
+  function addStat(st, t, r) {              // 1戦ぶんを足す（r は 1戦の結果。winner は p1 があなた）
+    const lead = t.rule === 'doubles' ? 2 : 1;
+    st.n++;
+    if (r.winner === 'p1') st.win++; else if (r.winner === 'p2') st.lose++; else st.tie++;
+    st.turns += r.turns || 0;
+    r.picks.p1.forEach((name, i) => {
+      const m = st.mine[name] || (st.mine[name] = { pick: 0, lead: 0, win: 0, ko: 0, fnt: 0 });
+      m.pick++; if (i < lead) m.lead++; if (r.winner === 'p1') m.win++;
+      m.ko += r.kos['p1:' + name] || 0; m.fnt += r.fnt['p1:' + name] ? 1 : 0;
+    });
+  }
+  const RES_JA = { W: '勝', L: '負', T: '分' }, resOf = w => (w === 'p1' ? 'W' : w === 'p2' ? 'L' : 'T');
+  const pctOf = (x, y) => (y ? Math.round((100 * x) / y) + '%' : '—');
+  const wlText = st => `${st.win}勝 ${st.lose}敗${st.tie ? ` ${st.tie}分` : ''}`;
+  function fmtAt(at) {
+    const d = new Date(at), p = n => String(n).padStart(2, '0');
+    return Number.isFinite(at) ? `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}` : '';
+  }
+  function monTable(t, st) {                // ポケモンごと（いまのチームの6匹を、選出の多い順に）
+    const rows = t.sets.map(x => ({ disp: GD[t.game].byPs.get(x.sp)[SP_DISP], m: st.mine[baseOf(t, x)] || { pick: 0, lead: 0, win: 0, ko: 0, fnt: 0 } }))
+      .sort((a, b) => b.m.pick - a.m.pick);
+    return '<div class="scroll-x"><table class="stab"><thead><tr><th class="l">ポケモン</th><th>選出</th><th>先発</th><th>勝率</th><th>撃破</th><th>ひんし</th></tr></thead><tbody>' +
+      rows.map(({ disp, m }) => `<tr><td class="l">${esc(disp)}</td><td>${pctOf(m.pick, st.n)}</td><td>${pctOf(m.lead, st.n)}</td>` +
+        `<td>${pctOf(m.win, m.pick)}</td><td>${m.pick ? (m.ko / m.pick).toFixed(2) : '—'}</td><td>${pctOf(m.fnt, m.pick)}</td></tr>`).join('') + '</tbody></table></div>';
+  }
+  const statSum = st => `<div class="rsum"><b class="wl">${wlText(st)}</b><span class="rate">勝率 <b>${pctOf(st.win, st.n)}</b></span>` +
+    `<span class="rn">${st.n}戦・平均 ${(st.turns / st.n).toFixed(1)}ターン</span></div>`;
+  function recordHTML(t, where) {           // チームの画面と、対戦のトップの下に出す
+    const r = recOf(t), play = r && r.play.n ? r.play : null, sim = r && r.sim.n ? r.sim : null, lead = t.rule === 'doubles' ? 2 : 1;
+    let h = '<section class="rec">' + (where === 'setup'
+      ? `<h2 class="sec">あなたのチームの戦績<small>${esc(t.name)}</small></h2>` : '<h2 class="sec">このチームの戦績</h2>');
+    if (!play && !sim) h += '<p class="fine">まだ戦績はありません。このチームで対戦や連戦をすると、ここに記録されます。</p>';
+    if (play) {
+      const recent = play.recent.slice(0, 10);
+      h += '<div class="card recc" data-rec="play"><h3>対戦<small>あなたが操作</small></h3>' + statSum(play) +
+        `<ol class="streak" aria-label="最近の結果（左ほど新しい）">${recent.map(x => `<li class="${esc(x.res)}">${RES_JA[x.res] || ''}</li>`).join('')}</ol>` +
+        monTable(t, play) + `<details><summary>最近の対戦（${recent.length}件）</summary><ul class="rlist">` + recent.map(x =>
+          `<li><span class="res ${esc(x.res)}">${RES_JA[x.res] || ''}</span><span class="rt">${fmtAt(x.at)}・相手：${esc(x.opp)}・${x.turns}ターン</span>` +
+          `<span class="rp">選出：${(x.picks || []).map((n, i) => esc(n) + (i < lead ? '（先発）' : '')).join('、')}</span></li>`).join('') + '</ul></details></div>';
+    }
+    if (sim) {
+      h += '<div class="card recc" data-rec="sim"><h3>連戦<small>CPU どうし</small></h3>' + statSum(sim) + monTable(t, sim) +
+        `<details><summary>連戦の履歴（${sim.recent.length}回）</summary><ul class="rlist runs">` + sim.recent.map(x =>
+          `<li><span class="rt">${fmtAt(x.at)}・相手：${esc(x.opp)}</span><span class="rp">${x.n}戦 ${wlText(x)}（勝率 ${pctOf(x.win, x.n)}）</span></li>`).join('') +
+        '</ul></details></div>';
+    }
+    if (play || sim) {
+      h += '<p class="fine">「選出」「先発」は全体の対戦に対する割合、「勝率」は選出したときの勝率、「撃破」は1戦あたりに倒した数、「ひんし」は選出したときに倒された割合です。</p>';
+    }
+    h += '<p class="fine">ポケモン・技・持ち物・特性・性格・能力ポイントなど、編成の中身が記録したときから変わると、戦績はリセットされます。チームの名前を変えてもリセットされません。</p>';
+    if (play || sim) h += `<div class="opts"><button type="button" class="btn warn" data-recclear="${t.id}">戦績を消す</button></div>`;
+    return h + '</section>';
+  }
+  function recordsTable(g, rule, selId) {   // 対戦のトップ：このルールのチームを並べて比べる（ほかのチームにも戦績があるとき）
+    const list = teamsFor(g, rule).map(t => ({ t, r: recOf(t) })).filter(x => x.r && (x.r.play.n || x.r.sim.n));
+    if (!list.some(x => x.t.id !== selId)) return '';
+    const cell = st => (st.n ? `<td>${st.win}-${st.lose}${st.tie ? `-${st.tie}` : ''}</td><td>${pctOf(st.win, st.n)}</td>` : '<td>—</td><td>—</td>');
+    list.sort((a, b) => b.r.play.n + b.r.sim.n - (a.r.play.n + a.r.sim.n));
+    return `<section class="rec" id="rec-all"><h2 class="sec">チームごとの戦績<small>${ruleLabel(g, rule)}</small></h2><div class="card recc"><div class="scroll-x"><table class="stab rtab"><thead><tr>` +
+      '<th class="l">チーム</th><th>対戦</th><th>勝率</th><th>連戦</th><th>勝率</th></tr></thead><tbody>' +
+      list.map(({ t, r }) => `<tr${t.id === selId ? ' class="me"' : ''}><td class="l"><a href="#/team/${t.id}">${esc(t.name)}</a></td>${cell(r.play)}${cell(r.sim)}</tr>`).join('') +
+      '</tbody></table></div></div><p class="fine">「対戦」はあなたが操作した対戦の勝ち-負け（-引き分け）、「連戦」は CPU どうしの結果です。色のついた行が、いま選んでいるチームです。</p></section>';
+  }
+  function recLine(t) {                     // チーム一覧の1行
+    const r = recOf(t);
+    if (!r || (!r.play.n && !r.sim.n)) return '';
+    const p = [];
+    if (r.play.n) p.push(`対戦 ${wlText(r.play)}（${pctOf(r.play.win, r.play.n)}）`);
+    if (r.sim.n) p.push(`連戦 ${r.sim.n}戦 勝率${pctOf(r.sim.win, r.sim.n)}`);
+    return `<p class="fine recl">戦績：${p.join('・')}</p>`;
+  }
+  function recordPlay(sess) {               // あなたが操作した対戦が終わったら、チームの戦績に足す
+    sess.rec.done = true;
+    const t = teamById(sess.rec.tid);
+    if (!t || teamFp(t) !== sess.rec.fp) return;   // 対戦中にチームを変えた・消した
+    const r = { winner: sess.winner === 'あなた' ? 'p1' : sess.winner === '相手' ? 'p2' : '', turns: sess.st.turns, picks: sess.st.picks,
+      kos: sess.st.kos, fnt: sess.st.fnt };
+    const rec = recOf(t, true);
+    addStat(rec.play, t, r);
+    rec.play.recent.unshift({ at: Date.now(), res: resOf(r.winner), opp: sess.rec.opp, turns: r.turns, picks: r.picks.p1.map(n => dispOfBase(t, n)) });
+    rec.play.recent.length = Math.min(rec.play.recent.length, 20);
+    save();
+  }
   const bookmarks = () => { try { const a = JSON.parse(store.get('pd.bookmarks') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } };
   function findByPid(g, pid) {              // 図鑑のポケモン（pokemon_id）→ このゲームで使える姿（メガシンカは元の姿＋メガストーン）
     const G = GD[g], sp = G.species.find(x => x[SP_PID] === pid);
@@ -226,7 +339,7 @@
   }
 
   const save = () => store.set('pd.bt.v2', JSON.stringify({ game: S.game, rule: S.rule, cpu: S.cpu, teams: S.teams, sel: S.sel,
-    autoPrev: S.autoPrev, simN: S.simN, simTeam: S.simTeam }));
+    autoPrev: S.autoPrev, simN: S.simN, simTeam: S.simTeam, records: S.records }));
   function cleanSets(arr, g) {             // 保存されていた6匹を、今のデータで使えるか確かめ直す
     return arr.filter(x => x && GD[g].byPs.has(x.sp)).map(x => {
       const y = fromPS({ species: GD[g].byPs.get(x.sp)[SP_ID], ability: x.ability, item: x.item, moves: x.moves, nature: x.nature, teraType: x.tera,
@@ -269,6 +382,10 @@
     for (const k in o.autoPrev || {}) { const g = k.split('_')[0]; if (GD[g] && Array.isArray(o.autoPrev[k])) S.autoPrev[k] = cleanSets(o.autoPrev[k], g); }
     if ([10, 30, 100].includes(o.simN)) S.simN = o.simN;
     if (typeof o.simTeam === 'string') S.simTeam = o.simTeam;
+    for (const id in (o.records && typeof o.records === 'object' && o.records) || {}) {
+      const r = o.records[id];
+      if (S.teams.some(t => t.id === id) && r && typeof r.fp === 'string') S.records[id] = { fp: r.fp, play: cleanStat(r.play), sim: cleanStat(r.sim) };
+    }
   }
 
   function problems() {
@@ -376,6 +493,7 @@
     $('problems').hidden = !probs.length;
     $('problems').innerHTML = probs.map(esc).join('<br>');
     $('start').disabled = probs.length > 0;
+    $('rec-box').innerHTML = recordHTML(teamById(sel.you), 'setup') + recordsTable(S.game, S.rule, sel.you);
     save();
   }
 
@@ -395,6 +513,7 @@
       `<button type="button" class="btn ink" data-useteam="${tid}">このチームで対戦</button><button type="button" class="btn" data-simteam="${tid}">連戦する</button>` +
       `<button type="button" class="btn" data-dupteam="${tid}">複製</button><button type="button" class="btn" data-autoteam="${tid}">おまかせで作り直す</button>` +
       `<button type="button" class="btn warn" data-delteam="${tid}">このチームを削除</button></div>`;
+    h += recordHTML(tm, 'team');
     h += '<h2 class="sec">テキストで読み込み・書き出し</h2><p class="fine">Pokémon Showdown と同じ形式（英語）です。対戦サイトなどで公開されているチームを貼り付けて読み込めます。</p>' +
       `<textarea class="paste" id="paste" spellcheck="false" autocapitalize="off" aria-label="チームのテキスト">${esc(PSEngine.Teams.export(t.map(s => toPSEnglish(s, S.game))))}</textarea>` +
       `<div class="opts"><button type="button" class="btn ink" data-paste="${tid}">貼り付けて読み込む</button>` +
@@ -458,27 +577,135 @@
     }
     return h;
   }
+  // ---- 能力ポイント（努力値）の振り分け ------------------------------------------------
+  // 1つの能力を2段で表示する。上：名前・（SV は個体値）・振った数・実数値、下：−・バー・＋・最大。
+  // よく使う振り方（AS など）は、図鑑の実数値と同じ。余りは HP（AS・CS）か、ぼうぎょ・とくぼう に振る
+  const EV_PRESETS = {
+    sv: { AS: [4, 252, 0, 0, 0, 252], CS: [4, 0, 0, 252, 0, 252], HA: [252, 252, 4, 0, 0, 0],
+      HC: [252, 0, 4, 252, 0, 0], HB: [252, 0, 252, 0, 4, 0], HD: [252, 0, 4, 0, 252, 0] },
+    ch: { AS: [2, 32, 0, 0, 0, 32], CS: [2, 0, 0, 32, 0, 32], HA: [32, 32, 2, 0, 0, 0],
+      HC: [32, 0, 2, 32, 0, 0], HB: [32, 0, 32, 0, 2, 0], HD: [32, 0, 2, 0, 32, 0] },
+  };
+  const PRESET_NOTE = { AS: 'こうげき・すばやさ', CS: 'とくこう・すばやさ', HA: 'HP・こうげき', HC: 'HP・とくこう', HB: 'HP・ぼうぎょ', HD: 'HP・とくぼう' };
+  const evSum = evs => evs.reduce((a, b) => a + b, 0);
+  function reachEV(evs, i, lim) {           // 合計の上限から見て、この能力に振れるいちばん大きい値
+    return Math.max(0, Math.min(lim.max, lim.total - (evSum(evs) - evs[i])));
+  }
+  const evTotalText = (ch, tot, lim) => `${ch ? '能力ポイント' : '努力値'}の合計 ${tot} / ${lim.total}` +
+    (tot > lim.total ? '（上限を超えています）' : `（残り ${lim.total - tot}）`);
   function statsHTML(set, sp) {
     const g = S.game, ch = GD[g].statPoints, lim = LIMIT(g), [up, down] = natUD(set.nature), word = ch ? '能力P' : '努力値';
-    let h = `<div class="scroll-x"><table class="ctab"><thead><tr><th class="l">能力</th>${ch ? '' : '<th>個体値</th>'}<th colspan="3">${word}</th><th class="r">実数値</th></tr></thead><tbody>`;
-    for (let i = 0; i < 6; i++) {
-      const v = calcStat(g, i, sp[SP_ST][i], 50, ch ? 31 : set.ivs[i], set.evs[i], up, down);
-      const mark = i && up !== down ? (up === i ? 'up' : down === i ? 'down' : '') : '';
-      h += `<tr><td class="lab2">${STAT_KEYS[i]} ${STAT_JA[i]}<span class="${mark}">${mark === 'up' ? '↑' : mark === 'down' ? '↓' : ''}</span></td>` +
-        (ch ? '' : `<td><input class="nin" type="text" inputmode="numeric" maxlength="2" data-iv="${i}" value="${set.ivs[i]}" aria-label="${STAT_JA[i]}の個体値"></td>`) +
-        `<td><button type="button" class="stp" data-step="-1" data-i="${i}" aria-label="${STAT_JA[i]}の実数値を下げる">−</button></td>` +
-        `<td><input class="nin" type="text" inputmode="numeric" maxlength="3" data-ev="${i}" value="${set.evs[i]}" aria-label="${STAT_JA[i]}の${word}"></td>` +
-        `<td><button type="button" class="stp" data-step="1" data-i="${i}" aria-label="${STAT_JA[i]}の実数値を上げる">＋</button></td>` +
-        `<td class="out ${mark}">${v}</td></tr>`;
+    const full = ch ? '能力ポイント' : '努力値', tot = evSum(set.evs);
+    let h = '<div class="evp"><span class="flab2">よく使う振り方</span><div class="chips">' + Object.keys(PRESET_NOTE).map(k =>
+      `<button type="button" class="chip" data-preset="${k}" aria-label="${k}：${PRESET_NOTE[k]}に最大まで振り、余りをほかに振る">${k}</button>`).join('') +
+      '<button type="button" class="chip" data-preset="0">すべて0</button></div></div>';
+    if (!ch) {
+      h += '<div class="evp"><span class="flab2">個体値</span><div class="chips"><button type="button" class="chip" data-ivp="31">すべて31</button>' +
+        '<button type="button" class="chip" data-ivp="a0">Aだけ0</button><button type="button" class="chip" data-ivp="s0">Sだけ0</button></div></div>';
     }
-    const tot = set.evs.reduce((a, b) => a + b, 0);
-    return h + `</tbody></table></div><p class="total${tot > lim.total ? ' over' : ''}">${ch ? '能力ポイント' : '努力値'}の合計 ${tot} / ${lim.total}` +
-      (tot > lim.total ? '（上限を超えています）' : `（残り ${lim.total - tot}）`) + '</p>';
+    h += `<div class="evh${ch ? '' : ' iv'}" aria-hidden="true"><span>能力</span>${ch ? '' : '<span>個体値</span>'}<span>${word}</span><span>実数値</span></div><div class="evl">`;
+    for (let i = 0; i < 6; i++) {
+      const ev = set.evs[i], v = calcStat(g, i, sp[SP_ST][i], 50, ch ? 31 : set.ivs[i], ev, up, down), reach = reachEV(set.evs, i, lim);
+      const mark = i && up !== down ? (up === i ? 'up' : down === i ? 'down' : '') : '';
+      const pct = x => (100 * Math.min(x, lim.max)) / lim.max + '%';
+      h += `<div class="evr" data-row="${i}"><div class="l1${ch ? '' : ' iv'}"><span class="lab2">${STAT_KEYS[i]} ${STAT_JA[i]}` +
+        `<span class="${mark}">${mark === 'up' ? '↑' : mark === 'down' ? '↓' : ''}</span></span>` +
+        (ch ? '' : `<input class="nin" type="text" inputmode="numeric" maxlength="2" data-iv="${i}" value="${set.ivs[i]}" aria-label="${STAT_JA[i]}の個体値">`) +
+        `<span class="num" data-ev="${i}">${ev}</span><span class="out ${mark}">${v}</span></div>` +
+        `<div class="l2"><button type="button" class="stp" data-step="-1" data-i="${i}" aria-label="${STAT_JA[i]}の実数値を下げる">−</button>` +
+        `<div class="evs" role="slider" tabindex="0" data-sl="${i}" data-unit="${ch ? 1 : 4}" aria-label="${STAT_JA[i]}の${full}" aria-valuemin="0" ` +
+        `aria-valuemax="${lim.max}" aria-valuenow="${ev}" aria-valuetext="${ev}（実数値 ${v}）" style="--v:${pct(ev)};--r:${pct(Math.max(ev, reach))}">` +
+        '<span class="tr"><span class="th"></span></span></div>' +
+        `<button type="button" class="stp" data-step="1" data-i="${i}" aria-label="${STAT_JA[i]}の実数値を上げる">＋</button>` +
+        `<button type="button" class="mx" data-max="${i}" aria-label="${STAT_JA[i]}の${full}を最大にする">最大</button></div></div>`;
+    }
+    return h + `</div><p class="total${tot > lim.total ? ' over' : ''}">${evTotalText(ch, tot, lim)}</p>` +
+      '<p class="fine">バーはタップした位置に合わせて動き、横になぞると細かく動きます。＋／−は実数値が1つ変わるところまで、' +
+      '「最大」は合計の残りの範囲でいちばん多く振ります。点線の部分は、合計の上限を超えるので振れません。</p>';
   }
+  function refreshStats(set, sp) {           // 振った数・バー・実数値・合計を、作り直さずにその場で書き換える（なぞっている途中も使う）
+    const box = $('s-stats');
+    if (!box) return;
+    const g = S.game, ch = GD[g].statPoints, lim = LIMIT(g), [up, down] = natUD(set.nature), tot = evSum(set.evs);
+    for (let i = 0; i < 6; i++) {
+      const row = box.querySelector(`[data-row="${i}"]`);
+      if (!row) continue;
+      const v = calcStat(g, i, sp[SP_ST][i], 50, ch ? 31 : set.ivs[i], set.evs[i], up, down);
+      row.querySelector('.num').textContent = set.evs[i];
+      row.querySelector('.out').textContent = v;
+      setSlider(row.querySelector('.evs'), set.evs[i], reachEV(set.evs, i, lim), `${set.evs[i]}（実数値 ${v}）`);
+    }
+    const tl = box.querySelector('.total');
+    tl.classList.toggle('over', tot > lim.total);
+    tl.textContent = evTotalText(ch, tot, lim);
+  }
+  function flash(el) {                       // 上限で増やせないときに、合計の行を一瞬光らせる
+    if (!el) return;
+    el.classList.remove('flash');
+    void el.offsetWidth;                      // アニメーションを最初から再生させる
+    el.classList.add('flash');
+  }
+  // ---- 振り分けのバー（図鑑の実数値とチームの編集で同じしくみ。app.js と battle.js に同じものがある） ----
+  // タップした位置に合わせる・横になぞると動く・キー（← → Home End）でも動かせる。
+  // 縦にスクロールしようとして触れたときは値を変えない（touch-action: pan-y。指を離したときか、横に動かしたときに初めて変える）
+  function sliderAt(el, x) {
+    const r = el.querySelector('.tr').getBoundingClientRect(), max = +el.getAttribute('aria-valuemax'), unit = +el.dataset.unit || 1;
+    const t = r.width ? Math.max(0, Math.min(1, (x - r.left) / r.width)) : 0;
+    return Math.min(max, Math.round((t * max) / unit) * unit);
+  }
+  function setSlider(el, v, reach, text) {     // reach：合計の上限から見て、この能力に振れるいちばん大きい値
+    const max = +el.getAttribute('aria-valuemax') || 1;
+    el.style.setProperty('--v', (100 * Math.min(v, max)) / max + '%');
+    el.style.setProperty('--r', (100 * Math.min(max, Math.max(v, reach))) / max + '%');
+    el.setAttribute('aria-valuenow', v);
+    el.setAttribute('aria-valuetext', text);
+  }
+  function bindSliders(root, onValue) {         // onValue(バー, 値, なぞっている途中か)
+    let drag = null;
+    root.addEventListener('pointerdown', e => {
+      const el = e.target.closest('.evs');
+      if (!el || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      drag = { el, id: e.pointerId, x: e.clientX, y: e.clientY, on: e.pointerType === 'mouse' };
+      try { el.setPointerCapture(e.pointerId); } catch (err) { /* 捕まえられなくても動く */ }
+      if (drag.on) { e.preventDefault(); el.focus(); el.classList.add('drag'); onValue(el, sliderAt(el, e.clientX), false); }
+    });
+    root.addEventListener('pointermove', e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      const dx = Math.abs(e.clientX - drag.x), dy = Math.abs(e.clientY - drag.y);
+      if (!drag.on && dx > 6 && dx > dy) { drag.on = true; drag.el.classList.add('drag'); }
+      if (drag.on) onValue(drag.el, sliderAt(drag.el, e.clientX), true);
+    });
+    const end = e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      // タップ（ほとんど動かさずに離した）なら、その位置に合わせる
+      if (e.type === 'pointerup' && !drag.on && Math.abs(e.clientY - drag.y) < 10) onValue(drag.el, sliderAt(drag.el, e.clientX), false);
+      drag.el.classList.remove('drag');
+      drag = null;
+    };
+    root.addEventListener('pointerup', end);
+    root.addEventListener('pointercancel', end);
+    root.addEventListener('keydown', e => {
+      const el = e.target.closest && e.target.closest('.evs');
+      if (!el) return;
+      const unit = +el.dataset.unit || 1, now = +el.getAttribute('aria-valuenow'), max = +el.getAttribute('aria-valuemax');
+      const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
+      // 1目盛り（努力値は4）ずつ。目盛りからずれた値（読み込んだ 6 など）は、まず目盛りにそろえる
+      const v = d ? (d > 0 ? Math.floor(now / unit) * unit + unit : Math.ceil(now / unit) * unit - unit) : e.key === 'Home' ? 0 : e.key === 'End' ? max : null;
+      if (v == null) return;
+      e.preventDefault();
+      onValue(el, Math.max(0, Math.min(max, v)), false);
+    });
+  }
+
   function renderSet(tid, i) {
     const tm = teamById(tid), set = tm.sets[i], G = gd(), sp = G.byPs.get(set.sp);
     const base = `#/set/${tid}/${i}/pick/`;
     let h = bar(`${tm.name} ${i + 1}匹目`, `#/team/${tid}`);
+    const rc = recOf(tm);
+    if (rc && (rc.play.n || rc.sim.n)) {
+      h += `<p class="fine recnote">このチームには戦績があります（${[rc.play.n ? `対戦 ${rc.play.n}戦` : '', rc.sim.n ? `連戦 ${rc.sim.n}戦` : ''].filter(Boolean).join('・')}）。` +
+        'ポケモン・技・持ち物・能力ポイントなどを変えると、戦績はリセットされます。</p>';
+    }
     h += `<div class="field"><span class="flab">ポケモン</span><a class="pickbtn" href="${base}sp">${tt(sp[SP_T1])}${sp[SP_T2] >= 0 ? tt(sp[SP_T2]) : ''}<span class="pnm">${esc(sp[SP_DISP])}</span>` +
       `<span class="sub">${STAT_KEYS.map((k, j) => k + sp[SP_ST][j]).join(' ')}</span></a></div>`;
     h += `<div class="field"><span class="flab">特性</span><span class="sel"><select id="s-ab" aria-label="特性">${abilIds(sp).map(a =>
@@ -1026,7 +1253,7 @@
       const list = teamsFor(g, r);
       if (!list.length) continue;
       h += `<h2 class="sec">${ruleLabel(g, r)}</h2>` + list.map(t => `<div class="card team"><h3>${esc(t.name)}<span class="n">${t.sets.length}/6</span></h3>` +
-        chips(t.sets, g) + teamInfo(t.sets, g) + `<div class="acts"><a class="btn" href="#/team/${t.id}">編集する</a>` +
+        chips(t.sets, g) + teamInfo(t.sets, g) + recLine(t) + `<div class="acts"><a class="btn" href="#/team/${t.id}">編集する</a>` +
         `<button type="button" class="btn" data-useteam="${t.id}">このチームで対戦</button><button type="button" class="btn" data-simteam="${t.id}">連戦する</button></div></div>`).join('');
     }
     V.teams.innerHTML = h;
@@ -1060,7 +1287,9 @@
         `<button type="button" data-simn="${n}" aria-pressed="${n === S.simN}"${running ? ' disabled' : ''}>${n}回</button>`).join('')}</div></div>` +
       `<p class="problems" id="sim-prob" hidden></p><button type="button" class="primary" id="sim-go">${running ? '止める' : '開始'}</button>` +
       '<p class="fine">選出・技・交代は、あなたのチームも相手も CPU が選びます。100回で1〜2分ほどかかります。</p></div>' +
-      `<div id="sim-out">${SIM && SIM.agg ? simHTML(SIM.agg) : ''}</div>`;
+      `<div id="sim-out">${SIM && SIM.agg ? simHTML(SIM.agg) : ''}</div>` +
+      (SIM && !running && SIM.recorded && teamById(SIM.tid) ? `<p class="fine recl">この${SIM.recorded}戦は「${esc(teamById(SIM.tid).name)}」の戦績にも足しました。` +
+        `<a href="#/team/${SIM.tid}">チームの画面で見る</a></p>` : '');
   }
   function newAgg(t, opp) {
     const mine = {};
@@ -1105,20 +1334,36 @@
     const t = teamById($('sim-team').value), opp = $('sim-opp').value, n = S.simN;
     const probs = teamProblems(t.sets, t.game, t.rule).concat(opp !== 'auto' ? teamProblems(teamById(opp).sets, t.game, t.rule).map(x => '相手：' + x) : []);
     if (probs.length) { $('sim-prob').hidden = false; $('sim-prob').innerHTML = probs.map(esc).join('<br>'); return; }
-    SIM = { running: true, cancel: false, opp, agg: newAgg(t, opp) };
+    SIM = { running: true, cancel: false, opp, tid: t.id, agg: newAgg(t, opp) };
     SIM.agg.total = n;
     renderSim();
+    // 結果はチームの戦績にも足す（途中で編成を変えたら、そこからは足さない）
+    const fp0 = teamFp(t), run = { at: Date.now(), opp: opp === 'auto' ? 'おまかせ' : teamById(opp).name, n: 0, win: 0, lose: 0, tie: 0 };
+    const same = () => teamById(t.id) === t && teamFp(t) === fp0;
     for (let i = 0; i < n && !SIM.cancel; i++) {
       const theirs = opp === 'auto' ? autoTeam(t.game, t.rule) : teamById(opp).sets;
       const r = await simOne(t.game, t.rule, t.sets, theirs);
       addResult(SIM.agg, r);
+      if (same()) {
+        addStat(recOf(t, true).sim, t, r);
+        run.n++; run[r.winner === 'p1' ? 'win' : r.winner === 'p2' ? 'lose' : 'tie']++;
+        if (run.n % 10 === 0) save();
+      }
       const out = $('sim-out');
       if (out) out.innerHTML = `<p class="fine">${i + 1} / ${n} 戦目</p>` + simHTML(SIM.agg);
     }
+    if (run.n && same()) {
+      const rec = recOf(t, true);
+      rec.sim.recent.unshift(run);
+      rec.sim.recent.length = Math.min(rec.sim.recent.length, 10);
+    }
+    SIM.recorded = run.n;
+    save();
     SIM.running = false;
     B = null;
     if (location.hash === '#/sim') renderSim();
   }
+
   // 画面に出さずに CPU どうしで1戦する（対戦画面と同じしくみを使い、表示だけ省く）
   function simOne(g, r, mine, theirs) {
     return new Promise(resolve => {
@@ -1126,7 +1371,7 @@
       const sess = { headless: true, f, game: g, cpu: { p1: true, p2: true }, stream, ps, req: { p1: null, p2: null }, done: { p1: false, p2: false },
         err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0 }, over: false, winner: '', lastWeather: '',
         unknown: new Set(), errors: [], ui: null, text: [], teams: { p1: mine, p2: theirs },
-        st: { last: null, hitBy: {}, dmg: {}, kos: {}, fnt: {}, picks: { p1: [], p2: [] }, disp: {}, turns: 0 } };
+        st: newSt() };
       sess.finish = () => {
         if (sess.done2) return;
         sess.done2 = true; sess.over = true;
@@ -1143,7 +1388,8 @@
       setTimeout(() => { if (!sess.done2) { sess.errors.push('時間切れ'); sess.finish(); } }, 60000);
     });
   }
-  function simLine(cmd, a, kw) {            // 連戦用：戦績に必要なことだけをログから拾う
+  const newSt = () => ({ last: null, hitBy: {}, dmg: {}, kos: {}, fnt: {}, picks: { p1: [], p2: [] }, disp: {}, turns: 0, hp: new Map() });
+  function statLine(cmd, a, kw) {           // 戦績に必要なことだけをログから拾う（選出・ターン・撃破・ひんし）
     const st = B.st;
     switch (cmd) {
       case 'start': {
@@ -1155,15 +1401,15 @@
       case 'turn': st.turns = +a[0]; break;
       case 'switch': case 'drag': case 'replace': {
         const p = parseIdent(a[0]), h = parseHP(a[2]);
-        if (p && h) B.hp.set(p.key, { cur: h.cur, max: h.max || (B.hp.get(p.key) || {}).max || h.cur });
+        if (p && h) st.hp.set(p.key, { cur: h.cur, max: h.max || (st.hp.get(p.key) || {}).max || h.cur });
         break;
       }
       case 'move': st.last = parseIdent(a[0]); break;
       case '-damage': case '-heal': case '-sethp': {
         const p = parseIdent(a[0]), h = parseHP(a[1]);
         if (!p || !h) break;
-        const prev = B.hp.get(p.key) || { cur: h.cur, max: h.max }, max = h.max || prev.max;
-        B.hp.set(p.key, { cur: h.cur, max });
+        const prev = st.hp.get(p.key) || { cur: h.cur, max: h.max }, max = h.max || prev.max;
+        st.hp.set(p.key, { cur: h.cur, max });
         if (cmd === '-damage' && !kw.from && st.last && st.last.side !== p.side) {
           st.dmg[st.last.key] = (st.dmg[st.last.key] || 0) + Math.max(0, prev.cur - h.cur) / (max || 1);
           st.hitBy[p.key] = st.last.key;
@@ -1178,10 +1424,9 @@
         if (k) st.kos[k] = (st.kos[k] || 0) + 1;
         break;
       }
-      case 'win': B.winner = a[0]; B.finish(); break;
-      case 'tie': B.winner = ''; B.finish(); break;
     }
   }
+
 
 
   // ---- バトル ------------------------------------------------------------
@@ -1194,12 +1439,13 @@
   }
   function startBattle() {
     if (problems().length) return;
-    const you = team('you').slice(), opp = team('opp').slice();
-    if (selOf(S.game, S.rule).opp === 'auto') S.autoUsed[key()] = true;   // 次に設定画面を開くと、新しい おまかせ を作る
+    const you = team('you').slice(), opp = team('opp').slice(), sel = selOf(S.game, S.rule), mine = teamById(sel.you);
+    const rec = { tid: mine.id, fp: teamFp(mine), opp: sel.opp === 'auto' ? 'おまかせ' : teamById(sel.opp).name, done: false };   // 戦績に足すための情報
+    if (sel.opp === 'auto') S.autoUsed[key()] = true;   // 次に設定画面を開くと、新しい おまかせ を作る
     const f = fmtInfo(), stream = new PSEngine.BattleStream(), ps = PSEngine.getPlayerStreams(stream);
     const sess = { f, game: S.game, cpu: { p1: AUTOTEST, p2: S.cpu || AUTOTEST }, stream, ps, req: { p1: null, p2: null }, done: { p1: false, p2: false },
       err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0 }, over: false, winner: '', lastWeather: '', unknown: new Set(), errors: [], ui: null, text: [],
-      teams: { p1: you, p2: opp } };
+      teams: { p1: you, p2: opp }, rec, st: newSt() };
     B = sess;
     V.battle.innerHTML = `<div class="bar"><button type="button" class="back" data-act="quit">${BACK_SVG}やめる</button>` +
       `<span class="ttl">${S.game === 'ch' ? 'チャンピオンズ' : 'SV'}・${f.gameType === 'doubles' ? 'ダブル' : 'シングル'}</span><span class="sp" id="b-turn"></span></div>` +
@@ -1520,11 +1766,18 @@
         const m = /^\[(\w+)\]\s?(.*)$/.exec(x);
         if (m) kw[m[1]] = m[2]; else args.push(x);
       }
-      if (B.headless) { simLine(cmd, args, kw); continue; }
+      if (B.st) statLine(cmd, args, kw);           // 戦績の集計（連戦・対戦とも）
+      if (B.headless) {
+        if (cmd === 'win') { B.winner = args[0]; B.finish(); } else if (cmd === 'tie') { B.winner = ''; B.finish(); }
+        continue;
+      }
       try { for (const it of fmtLine(cmd, args, kw)) items.push(it); }
       catch (e) { B.errors.push(String(e)); items.push({ cls: 'err', html: esc(line) }); }
     }
-    if (!B.headless) { appendLog(items); renderField(); }
+    if (!B.headless) {
+      appendLog(items); renderField();
+      if (B.over && B.rec && !B.rec.done) recordPlay(B);
+    }
     scheduleCmd();
   }
   function appendLog(items) {
@@ -2116,7 +2369,12 @@
       const dl = e.target.closest('[data-delteam]');
       if (dl) {
         if (dl.dataset.sure !== '1') { dl.dataset.sure = '1'; dl.textContent = '本当に削除する'; return; }
-        S.teams = S.teams.filter(t => t.id !== dl.dataset.delteam); save(); location.hash = '#/teams'; return;
+        S.teams = S.teams.filter(t => t.id !== dl.dataset.delteam); delete S.records[dl.dataset.delteam]; save(); location.hash = '#/teams'; return;
+      }
+      const rcl = e.target.closest('[data-recclear]');
+      if (rcl) {
+        if (rcl.dataset.sure !== '1') { rcl.dataset.sure = '1'; rcl.textContent = '本当に戦績を消す'; return; }
+        delete S.records[rcl.dataset.recclear]; save(); route(); return;
       }
       const pa = e.target.closest('[data-paste]');
       if (pa) { pasteImport(pa.dataset.paste); return; }
@@ -2145,33 +2403,63 @@
       save();
       $('s-stats').innerHTML = statsHTML(c.set, gd().byPs.get(c.set.sp));
     });
-    V.set.addEventListener('input', e => {
+    V.set.addEventListener('input', e => {        // 個体値（SV）は数字で入れる。全角数字も受け付ける
       const c = curSet(), el = e.target;
-      if (!c || !el.classList.contains('nin')) return;
+      if (!c || !el.classList.contains('nin') || el.dataset.iv == null) return;
       const n = parseInt(String(el.value).normalize('NFKC').replace(/[^0-9]/g, '') || '0', 10);
-      if (el.dataset.iv != null) c.set.ivs[+el.dataset.iv] = Math.min(31, n);
-      else if (el.dataset.ev != null) c.set.evs[+el.dataset.ev] = Math.min(LIMIT(S.game).max, n);
+      c.set.ivs[+el.dataset.iv] = Math.min(31, n);
       save();
-      const sp = gd().byPs.get(c.set.sp), [up, down] = natUD(c.set.nature), ch = gd().statPoints;
-      const row = el.closest('tr'), i = +(el.dataset.iv != null ? el.dataset.iv : el.dataset.ev);
-      row.querySelector('.out').textContent = calcStat(S.game, i, sp[SP_ST][i], 50, ch ? 31 : c.set.ivs[i], c.set.evs[i], up, down);
-      const lim = LIMIT(S.game), tot = c.set.evs.reduce((a, b) => a + b, 0), tl = V.set.querySelector('.total');
-      tl.className = 'total' + (tot > lim.total ? ' over' : '');
-      tl.textContent = `${ch ? '能力ポイント' : '努力値'}の合計 ${tot} / ${lim.total}` + (tot > lim.total ? '（上限を超えています）' : `（残り ${lim.total - tot}）`);
+      refreshStats(c.set, gd().byPs.get(c.set.sp));
     });
     V.set.addEventListener('focusout', e => {
       const el = e.target, c = curSet();
-      if (!c || !el.classList.contains('nin')) return;
-      el.value = el.dataset.iv != null ? c.set.ivs[+el.dataset.iv] : c.set.evs[+el.dataset.ev];
+      if (!c || !el.classList.contains('nin') || el.dataset.iv == null) return;
+      el.value = c.set.ivs[+el.dataset.iv];
     });
     V.set.addEventListener('click', e => {
       if (e.target.closest('a.pickbtn')) { pickFromSet = true; return; }
+      const c = curSet();
+      if (!c) return;
+      const sp = gd().byPs.get(c.set.sp), lim = LIMIT(S.game), total = () => V.set.querySelector('.total');
       const b = e.target.closest('[data-step]');
-      if (!b) return;
-      const c = curSet(), i = +b.dataset.i;
-      c.set.evs[i] = stepEV(c.set, gd().byPs.get(c.set.sp), i, +b.dataset.step);
-      save();
-      $('s-stats').innerHTML = statsHTML(c.set, gd().byPs.get(c.set.sp));
+      if (b) {                                   // ＋／−：実数値が1つ変わるところまで
+        const i = +b.dataset.i, dir = +b.dataset.step, nv = stepEV(c.set, sp, i, dir);
+        if (nv === c.set.evs[i]) { if (dir > 0) flash(total()); return; }
+        c.set.evs[i] = nv;
+        save(); refreshStats(c.set, sp);
+        return;
+      }
+      const mx = e.target.closest('[data-max]');
+      if (mx) {                                  // 最大（合計の残りが足りなければ、残りの分だけ）
+        const i = +mx.dataset.max, cur = c.set.evs[i], reach = reachEV(c.set.evs, i, lim);
+        if (reach > cur) { c.set.evs[i] = reach; save(); refreshStats(c.set, sp); }
+        else if (cur < lim.max) flash(total());
+        return;
+      }
+      const pr = e.target.closest('[data-preset]');
+      if (pr) {
+        c.set.evs = pr.dataset.preset === '0' ? [0, 0, 0, 0, 0, 0] : EV_PRESETS[gd().statPoints ? 'ch' : 'sv'][pr.dataset.preset].slice();
+        save(); refreshStats(c.set, sp);
+        return;
+      }
+      const ivp = e.target.closest('[data-ivp]');
+      if (ivp) {
+        const k = ivp.dataset.ivp;
+        if (k === '31') c.set.ivs = [31, 31, 31, 31, 31, 31];
+        else c.set.ivs[k === 'a0' ? 1 : 5] = 0;
+        save();
+        for (const el of V.set.querySelectorAll('[data-iv]')) el.value = c.set.ivs[+el.dataset.iv];
+        refreshStats(c.set, sp);
+      }
+    });
+    bindSliders(V.set, (el, v, moving) => {      // バー：合計の上限を超える分は、点線のところで止める
+      const c = curSet();
+      if (!c) return;
+      const i = +el.dataset.sl, cur = c.set.evs[i], reach = reachEV(c.set.evs, i, LIMIT(S.game));
+      if (v > reach) { if (!moving && cur >= reach) flash(V.set.querySelector('.total')); v = reach; }
+      if (v === cur) return;
+      c.set.evs[i] = v;
+      save(); refreshStats(c.set, gd().byPs.get(c.set.sp));
     });
     V.pick.addEventListener('input', e => { if (e.target.id === 'pick-q') renderPickList(e.target.value); });
     window.addEventListener('hashchange', route);
@@ -2232,6 +2520,20 @@
         movesFor(game, rule, ps, role) {   // 指定した型で、おまかせが選ぶ技
           const dbl = rule === 'doubles', sp = GD[game].byPs.get(ps);
           return pickMoves(game, formOf(game, sp, null, dbl), role, dbl);
+        },
+        recordOf(tid) { const t = teamById(tid); return t ? recOf(t) : null; },
+        fpStable(game, rule, n) {      // 保存して読み直しても、編成の指紋（戦績の照合に使う）が変わらないか
+          const bad = [];
+          for (let i = 0; i < n; i++) {
+            const t = { id: 'x', game, rule, sets: autoTeam(game, rule) };
+            const back = { id: 'x', game, rule, sets: cleanSets(JSON.parse(JSON.stringify(t.sets)), game) };
+            if (teamFp(t) !== teamFp(back)) bad.push(t.sets.map(x => x.sp).join('/'));
+          }
+          for (const k of Object.keys(D.samples)) {
+            const [g, r] = k.split('_'), t = { id: 'x', game: g, rule: r, sets: sampleTeam(k) };
+            if (teamFp(t) !== teamFp({ id: 'x', game: g, rule: r, sets: cleanSets(JSON.parse(JSON.stringify(t.sets)), g) })) bad.push('sample ' + k);
+          }
+          return bad;
         },
         cpuPreviews(side, n) {            // 選出（チームプレビュー）を n 回考えさせて、その結果を返す
           const out = [];

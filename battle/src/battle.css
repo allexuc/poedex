@@ -102,13 +102,54 @@ textarea.paste { width: 100%; min-height: 260px; padding: 10px; border-radius: 8
 .sel { position: relative; display: block; }
 .sel select { appearance: none; -webkit-appearance: none; width: 100%; min-height: 44px; padding: 0 30px 0 11px; border-radius: 9px; border: 1.5px solid var(--line); background: var(--card); font-size: 14.5px; font-weight: 700; cursor: pointer; }
 .sel::after { content: ""; position: absolute; right: 12px; top: 50%; width: 7px; height: 7px; pointer-events: none; border-right: 2px solid var(--ink-2); border-bottom: 2px solid var(--ink-2); transform: translateY(-70%) rotate(45deg); }
-.ctab { width: 100%; border-collapse: collapse; }
-.ctab th { font-size: 11.5px; font-weight: 700; color: var(--ink-2); padding: 0 2px 4px; text-align: center; }
-.ctab th.l { text-align: left; } .ctab th.r { text-align: right; }
-.ctab td { padding: 4px 2px; border-bottom: 1px solid var(--line); text-align: center; }
-.ctab tr:last-child td { border-bottom: 0; }
-.ctab .lab2 { text-align: left; font-weight: 700; font-size: 13.5px; white-space: nowrap; }
-.ctab .out { font-family: var(--font-num); font-weight: 700; font-size: 18px; text-align: right; padding-right: 4px; }
+.evr .lab2 { font-weight: 700; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* よく使う振り方・個体値のボタン（図鑑の実数値と同じ見た目） */
+.evp { margin: 0 0 10px; }
+.flab2 { display: block; font-size: 12px; font-weight: 700; color: var(--ink-2); margin-bottom: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  appearance: none; cursor: pointer; min-height: 38px; min-width: 44px; padding: 0 12px; border-radius: 8px;
+  border: 1.5px solid var(--line); background: var(--card); color: var(--ink); font: inherit; font-size: 14px; font-weight: 700;
+}
+.chip:active, .stp:active { background: var(--soft); }
+@keyframes bt-flash { 30% { background: color-mix(in srgb, var(--warn) 20%, transparent); } }
+@media (prefers-reduced-motion: no-preference) { .flash { animation: bt-flash 0.7s ease-out; } }
+.total { border-radius: 6px; padding: 2px 4px; }
+/* ---- 能力ポイント（努力値）の振り分け：1つの能力を2段で表示する ------------------------
+   上の段：名前・（個体値）・振った数・実数値　下の段：−・バー・＋・最大（図鑑とチームの編集で同じ見た目） */
+.evh, .evr .l1 { display: grid; grid-template-columns: minmax(0, 1fr) 44px 52px; align-items: center; column-gap: 8px; }
+.evh.iv, .evr .l1.iv { grid-template-columns: minmax(0, 1fr) 50px 44px 52px; }
+.evh { padding: 0 2px 4px; font-size: 11.5px; font-weight: 700; color: var(--ink-2); }
+.evh span:not(:first-child) { text-align: right; }
+.evr { padding: 6px 0 8px; border-top: 1px solid var(--line); }
+.evr .l1 { min-height: 30px; padding: 0 2px; }
+.evr .nin { width: 50px; min-height: 34px; justify-self: end; }
+.evr .num { font-family: var(--font-num); font-weight: 700; font-size: 17px; text-align: right; }
+.evr .out { font-family: var(--font-num); font-weight: 700; font-size: 20px; text-align: right; }
+.evr .l2 { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.evr .stp { flex: none; }
+.mx {
+  appearance: none; cursor: pointer; flex: none; height: 40px; padding: 0 11px; border-radius: 8px;
+  border: 1.5px solid var(--line); background: var(--card); color: var(--ink); font: inherit; font-size: 13.5px; font-weight: 700;
+}
+.mx:active { background: var(--soft); }
+/* バー：塗り＝振った分、灰色＝まだ振れる分、点線＝合計の上限を超えるので振れない分 */
+.evs {
+  position: relative; flex: 1 1 auto; min-width: 0; height: 40px; cursor: pointer; outline: none;
+  touch-action: pan-y; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+}
+.evs .tr {
+  position: absolute; left: 13px; right: 13px; top: 50%; height: 6px; margin-top: -3px; border-radius: 3px;
+  background: linear-gradient(to right, var(--ink) 0 var(--v, 0%), color-mix(in srgb, var(--ink-2) 40%, var(--paper)) var(--v, 0%) var(--r, 100%), transparent var(--r, 100%)),
+    repeating-linear-gradient(90deg, var(--line) 0 3px, transparent 3px 6px);
+}
+.evs .th {
+  position: absolute; left: var(--v, 0%); top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  background: var(--card); border: 2px solid var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+}
+.evs:focus-visible .th { box-shadow: 0 0 0 3px var(--focus); }
+@media (prefers-reduced-motion: no-preference) { .evs .th { transition: transform 0.12s; } }
+.evs.drag .th { transform: scale(1.15); }
 .nin { width: 3.1em; min-height: 40px; padding: 0 7px; border-radius: 8px; border: 1.5px solid var(--line); background: var(--card); font-family: var(--font-num); font-size: 16px; text-align: right; -webkit-appearance: none; appearance: none; }
 .stp { appearance: none; cursor: pointer; width: 34px; height: 40px; padding: 0; border-radius: 8px; border: 1.5px solid var(--line); background: var(--card); font-size: 18px; font-weight: 700; line-height: 1; }
 .up { color: var(--up); } .down { color: var(--down); }
@@ -251,3 +292,38 @@ table.stab { width: 100%; border-collapse: collapse; font-size: 13px; }
 .team h3, .slot .top, .pvb .nm, .benchb .nm, .log li, .problems, .fine { overflow-wrap: anywhere; }
 .mon .nm, .pvb .nm { word-break: keep-all; overflow-wrap: anywhere; }
 .plist .eff { display: block; font-size: 12px; font-weight: 700; color: var(--ink-2); margin-top: 1px; }
+
+/* ---- 編成ごとの戦績 ---------------------------------------------------- */
+.rec { margin-top: 24px; }
+.recc h3 small { font-family: var(--font-ui); font-size: 12px; font-weight: 700; color: var(--ink-2); margin-left: 8px; }
+.rec h2.sec { margin-bottom: 6px; }
+.rec h2.sec small { display: block; margin-top: 2px; font-family: var(--font-ui); font-size: 13px; font-weight: 700; color: var(--ink-2); overflow-wrap: anywhere; }
+.recc h3 { margin: 0 0 6px; font-size: 15px; }
+.rsum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+.rsum .wl { font-family: var(--font-num); font-size: 22px; }
+.rsum .rate { font-size: 13px; font-weight: 700; }
+.rsum .rate b { font-family: var(--font-num); font-size: 18px; }
+.rsum .rn { font-size: 12.5px; color: var(--ink-2); }
+.streak { list-style: none; display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 10px; padding: 0; }
+.streak li, .rlist .res {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; flex: none;
+  border-radius: 6px; border: 1.5px solid var(--ink); font-size: 12.5px; font-weight: 700;
+}
+.streak .W, .rlist .res.W { background: var(--ink); color: var(--paper); }
+.streak .L, .rlist .res.L { background: var(--card); color: var(--ink); }
+.streak .T, .rlist .res.T { border-style: dashed; color: var(--ink-2); }
+.recc .stab { margin-top: 4px; }
+.recc details { margin-top: 8px; }
+.recc summary { cursor: pointer; font-size: 13.5px; font-weight: 700; min-height: 40px; display: flex; align-items: center; }
+.rlist { list-style: none; margin: 0; padding: 0; }
+.rlist li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; align-items: center; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.rlist .res { grid-row: 1 / 3; }
+.rlist .rt { font-size: 12.5px; color: var(--ink-2); }
+.rlist .rp { overflow-wrap: anywhere; }
+.rlist.runs li { display: block; }
+.rlist.runs .rt, .rlist.runs .rp { display: block; }
+.rtab td.l a { font-weight: 700; }
+.rtab tr.me td { background: var(--soft); }
+.recl { margin-top: 6px; }
+.recl a { font-weight: 700; }
+.recnote { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: var(--soft); color: var(--ink); }

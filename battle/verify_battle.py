@@ -327,6 +327,168 @@ def check_ally_safe(b):
     ctx.close()
 
 
+def touch(pg, cdp, pts, steps=8):
+    """指で pts（[(x, y), ...]）の順になぞる。最初で触れ、最後で離す"""
+    (x0, y0) = pts[0]
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x0, "y": y0}]})
+    px, py = x0, y0
+    for (x, y) in pts[1:]:
+        for k in range(1, steps + 1):
+            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": px + (x - px) * k / steps, "y": py + (y - py) * k / steps}]})
+            pg.wait_for_timeout(8)
+        px, py = x, y
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    pg.wait_for_timeout(120)
+
+def track(pg, sel):
+    return pg.locator(sel).locator(".tr").bounding_box()
+
+def check_slider_touch(b):
+    print("■ 能力ポイントのバー（タッチ操作）")
+    ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    pg, errs = open_page(ctx)
+    cdp = ctx.new_cdp_session(pg)
+    you = sel_team(pg)
+    pg.goto(URL + f"#/set/{you}/0"); pg.wait_for_selector("#s-stats .evs")
+    ev = lambda i: int(pg.inner_text(f"#s-stats [data-ev='{i}']"))
+    pg.tap("[data-preset='0']")
+    check("「すべて0」で全部0", [ev(i) for i in range(6)], [0] * 6)
+    pg.locator("[data-sl='2']").scroll_into_view_if_needed()
+    r = track(pg, "[data-sl='2']"); y = r["y"] + r["height"] / 2
+    touch(pg, cdp, [(r["x"] + r["width"] * 0.5, y)])
+    check("バーの真ん中をタップすると半分（16）", ev(2), 16)
+    touch(pg, cdp, [(r["x"] + r["width"] * 0.5, y), (r["x"] + r["width"] * 0.25, y)])
+    check("左へなぞると減る（8）", ev(2), 8)
+    sy = pg.evaluate("scrollY")
+    touch(pg, cdp, [(r["x"] + r["width"] * 0.9, y), (r["x"] + r["width"] * 0.9, y - 220)])
+    try:                                       # スクロールが終わるのを待つ（重いときに備えて）
+        pg.wait_for_function(f"scrollY > {sy} + 50", timeout=3000)
+    except Exception:
+        pass
+    check("縦にスクロールしても値は変わらない（ページは動く）", [ev(2), pg.evaluate("scrollY") > sy + 50], [8, True])
+    pg.locator("[data-sl='0']").scroll_into_view_if_needed()
+    r0 = track(pg, "[data-sl='0']")
+    touch(pg, cdp, [(r0["x"] + r0["width"] + 10, r0["y"] + 3)])
+    check("右端をタップすると最大（32）", ev(0), 32)
+    pg.tap("[data-max='5']")
+    check("「最大」は合計の残りの範囲まで（S は 26）", [ev(5), int(pg.inner_text("#s-stats .total").split()[1])], [26, 66])
+    pg.tap("[data-max='1']")
+    check("合計がいっぱいのときの「最大」は増えず、合計の行が光る", [ev(1), "flash" in pg.get_attribute("#s-stats .total", "class")], [0, True])
+    r1 = track(pg, "[data-sl='1']")
+    touch(pg, cdp, [(r1["x"] + r1["width"] * 0.8, r1["y"] + 3)])
+    check("点線（上限を超える部分）をタップしても0のまま", ev(1), 0)
+    pg.tap("[data-step='-1'][data-i='0']")
+    check("−で1減る", ev(0), 31)
+    pg.tap("[data-max='1']")
+    check("1空いたら「最大」でそこまで", ev(1), 1)
+    pg.locator("[data-sl='4']").focus()
+    pg.keyboard.press("End")
+    check("キー：End は振れるところまで（0のまま）", ev(4), 0)
+    pg.locator("[data-sl='2']").focus()
+    pg.keyboard.press("ArrowLeft"); pg.keyboard.press("ArrowLeft")
+    check("キー：← で1ずつ減る", ev(2), 6)
+    pg.keyboard.press("Home")
+    check("キー：Home で0", ev(2), 0)
+    before = [ev(i) for i in range(6)]
+    pg.reload(); pg.wait_for_selector("#s-stats .evs")
+    check("再読み込みしても残る", [ev(i) for i in range(6)], before)
+    # SV：努力値は4ずつ・最大252、個体値のボタン
+    pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+    pg.select_option("#nt-rule", "sv_singles")
+    pg.tap("[data-newteam='empty']"); pg.wait_for_selector("#paste")
+    tid = pg.evaluate("location.hash.split('/')[2]")
+    pg.fill("#paste", "Garchomp @ Life Orb\nAbility: Rough Skin\nEVs: 252 Atk / 4 SpD / 252 Spe\nJolly Nature\n- Earthquake\n")
+    pg.tap(f"[data-import='{tid}']")
+    pg.goto(URL + f"#/set/{tid}/0"); pg.wait_for_selector("#s-stats .evs")
+    out = lambda i: int(pg.locator(f"#s-stats .evr[data-row='{i}'] .out").inner_text())
+    pg.tap("[data-ivp='s0']")
+    check("SV：個体値「Sだけ0」（ようき S252 → 151）", [pg.locator("[data-iv='5']").input_value(), out(5)], ["0", 151])
+    pg.tap("[data-ivp='31']")
+    pg.tap("[data-preset='HB']")
+    check("SV：よく使う振り方 HB（H252 B252 D4）", [ev(i) for i in range(6)], [252, 0, 252, 0, 4, 0])
+    pg.locator("[data-sl='1']").scroll_into_view_if_needed()
+    r = track(pg, "[data-sl='1']")
+    touch(pg, cdp, [(r["x"] + r["width"] * 0.9, r["y"] + 3)])
+    check("SV：上限の手前（残り2）までしか振れない", ev(1), 2)
+    check("  errors", errs, [])
+    ctx.close()
+
+
+def run_sim(pg, n=10):
+    pg.tap(f"[data-simn='{n}']"); pg.tap("#sim-go")
+    pg.wait_for_function("document.querySelector('#sim-go') && document.querySelector('#sim-go').textContent === '開始' && document.querySelector('.simres')",
+                         timeout=240000)
+
+def check_records(b):
+    print("■ 編成ごとの戦績")
+    ctx = new_context(b, viewport={"width": 390, "height": 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
+    pg, errs = open_page(ctx)
+    you = sel_team(pg)
+    rec = lambda tid: pg.evaluate("tid => (JSON.parse(localStorage.getItem('pd.bt.v2') || '{}').records || {})[tid] || null", tid)
+    check("最初は戦績がない", "まだ戦績はありません" in pg.inner_text("#rec-box"), True)
+    pg.tap("#start"); pg.wait_for_selector("#b-cmd .pvb")
+    play_until_end(pg)
+    big = pg.inner_text("#b-cmd .result .big")
+    pg.tap("[data-act='setup']"); pg.wait_for_selector("#rec-box .recc")
+    want = "1勝 0敗" if "あなたの勝ち" in big else "0勝 1敗" if "相手の勝ち" in big else "0勝 0敗 1分"
+    card = pg.locator("#rec-box [data-rec='play']")
+    check(f"対戦のあと、トップの下に戦績（{want}・1戦）", [want in card.inner_text(), "1戦" in card.inner_text(), card.locator(".streak li").count()], [True, True, 1])
+    picks = [int(x.rstrip('%')) for x in card.locator("tbody tr").evaluate_all("rs => rs.map(r => r.cells[1].textContent)") if x.endswith('%')]
+    check("ポケモンごとの表に6匹（選出の合計が 3匹 × 100%）", [card.locator("tbody tr").count(), sum(picks)], [6, 300])
+    pg.goto(URL + f"#/team/{you}"); pg.wait_for_selector("#v-team .rec")
+    check("チームの画面にも同じ戦績", want in pg.locator("#v-team [data-rec='play']").inner_text(), True)
+    pg.fill("#t-name", "戦績テストのチーム")
+    pg.goto(URL + "#/teams"); pg.wait_for_selector("#v-teams .recl")
+    check("チーム一覧に1行で出る（名前を変えても残る）", "戦績：対戦 " in pg.locator("#v-teams .card.team", has_text="戦績テストのチーム").inner_text(), True)
+    pg.reload(); pg.wait_for_selector("html[data-bt-ready='1']")
+    pg.goto(URL + f"#/team/{you}"); pg.wait_for_selector("#v-team .rec")
+    check("再読み込みしても残る", [(rec(you) or {}).get("play", {}).get("n"), want in pg.locator("#v-team [data-rec='play']").inner_text()], [1, True])
+
+    pg.goto(URL + "#/sim"); pg.wait_for_selector("#sim-go")
+    run_sim(pg)
+    r = rec(you)
+    check("連戦の結果もチームの戦績に足す（10戦・履歴1回）", [r["sim"]["n"], len(r["sim"]["recent"]), r["play"]["n"], pg.locator("#v-sim .recl").count()], [10, 1, 1, 1])
+    pg.goto(URL + "#/teams"); pg.wait_for_selector("[data-newteam]")
+    pg.tap("[data-newteam='auto']"); pg.wait_for_selector("#t-name")
+    other = pg.evaluate("location.hash.split('/')[2]")
+    pg.locator(f"#v-team [data-simteam='{other}']").tap(); pg.wait_for_selector("#sim-go")
+    run_sim(pg)
+    pg.goto(URL + "#/b"); pg.wait_for_selector("#rec-box .recc")
+    check("ほかのチームにも戦績があると、トップの下にチームごとの表（いまのチームに色）",
+          [pg.locator("#rec-all tbody tr").count(), pg.locator("#rec-all tr.me").count(), "戦績テストのチーム" in pg.inner_text("#rec-all tr.me")], [2, 1, True])
+
+    pg.goto(URL + f"#/set/{you}/0"); pg.wait_for_selector("#s-stats .evs")
+    check("1匹の編集の画面に、戦績がリセットされることの注意書き", pg.locator(".recnote").count(), 1)
+    evs = lambda: [pg.inner_text(f"#s-stats [data-ev='{i}']") for i in range(6)]
+    before = evs()
+    pg.tap("[data-preset='HB']")
+    check("能力ポイントを変える（HB）", evs() != before, True)
+    pg.goto(URL + f"#/team/{you}"); pg.wait_for_selector("#v-team .rec")
+    check("編成を変えると戦績はリセット", ["まだ戦績はありません" in pg.inner_text("#v-team .rec"), rec(you)], [True, None])
+
+    pg.goto(URL + f"#/team/{other}"); pg.wait_for_selector("#v-team [data-recclear]")
+    pg.tap("#v-team [data-recclear]"); pg.tap("#v-team [data-recclear]")
+    check("「戦績を消す」は2回押しで消える", ["まだ戦績はありません" in pg.inner_text("#v-team .rec"), rec(other)], [True, None])
+    pg.locator(f"#v-team [data-simteam='{other}']").tap(); pg.wait_for_selector("#sim-go")
+    run_sim(pg)
+    pg.goto(URL + f"#/team/{other}"); pg.wait_for_selector("#v-team [data-delteam]")
+    had = rec(other) is not None
+    pg.tap("#v-team [data-delteam]"); pg.tap("#v-team [data-delteam]"); pg.wait_for_selector("#v-teams .card")
+    check("チームを削除すると、その戦績も消える", [had, rec(other)], [True, None])
+    check("  errors", errs, [])
+    ctx.close()
+
+    ctx = new_context(b, viewport={"width": 390, "height": 844})
+    pg, errs = open_page(ctx, "?autotest=1")
+    bad = []
+    for g in ("ch", "sv"):
+        for r in ("singles", "doubles"):
+            bad += pg.evaluate("([g, r]) => __bt.fpStable(g, r, 10)", [g, r])
+    check("保存して読み直しても、編成の照合に使う指紋が変わらない（おまかせ40チーム・サンプル4チーム）", bad, [])
+    check("  errors", errs, [])
+    ctx.close()
+
+
 def main():
     with sync_playwright() as pw:
         b = pw.chromium.launch()
@@ -392,11 +554,11 @@ def main():
         pg.screenshot(path=str(SHOTS / "team.png"))
         pg.locator("a.slot").first.tap(); pg.wait_for_selector("#s-nat")
         pg.select_option("#s-nat", "Adamant")
-        check("性格を変えると こうげきに↑が付く", pg.locator(".ctab tr").nth(2).locator(".up").count() > 0, True)
-        before = pg.locator("[data-ev='2']").input_value()
+        check("性格を変えると こうげきに↑が付く", pg.locator("#s-stats .evr[data-row='1'] .up").count() > 0, True)
+        before = pg.locator("[data-ev='2']").inner_text()
         pg.locator("[data-step='-1'][data-i='0']").tap()
         pg.locator("[data-step='1'][data-i='2']").tap()
-        check("＋で能力ポイントが1増える（チャンピオンズ）", int(pg.locator("[data-ev='2']").input_value()) - int(before), 1)
+        check("＋で能力ポイントが1増える（チャンピオンズ）", int(pg.locator("[data-ev='2']").inner_text()) - int(before), 1)
         pg.screenshot(path=str(SHOTS / "set.png"), full_page=True)
         pg.locator("a.pickbtn[href$='move0']").tap(); pg.wait_for_selector("#pick-q")
         pg.fill("#pick-q", "がんせき")
@@ -494,6 +656,8 @@ def main():
         check_cpu_illusion(b)
         check_overflow(b)
         check_move_logic(b)
+        check_slider_touch(b)
+        check_records(b)
         check_ally_safe(b)
 
         print("■ おまかせ編成（画面の操作）")

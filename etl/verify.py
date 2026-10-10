@@ -208,7 +208,7 @@ def outs(pg):
 
 
 def inv_values(pg):
-    return [int(v) for v in pg.eval_on_selector_all("[data-inv]", "e => e.map(x => x.value)")]
+    return [int(v) for v in pg.eval_on_selector_all("[data-inv]", "e => e.map(x => x.textContent)")]
 
 
 def verify_calc(b):
@@ -244,15 +244,29 @@ def verify_calc(b):
     pg.tap('[data-lv="100"]')
     check("Lv.100 に切り替えた実数値", outs(pg), ref_all("sv", 100, [31] * 6, inv_values(pg), JOLLY))
     pg.tap('[data-lv="50"]')
-    pg.fill('[data-inv="1"]', "250")
-    ref_a = calc_ref([["sv", 1, base[1], 50, 31, e, *JOLLY] for e in range(251)])
-    waste = 250 - ref_a.index(ref_a[250])
-    check("余分な努力値の表示（こうげき 250 振り）", f"こうげき {waste}" in pg.inner_text("#c-waste"), True)
-    pg.fill('[data-inv="1"]', "２５２")
-    check("全角数字の入力", outs(pg)[1], calc_ref([["sv", 1, base[1], 50, 31, 252, *JOLLY]])[0])
+    pg.locator('[data-sl="1"]').focus()
+    pg.keyboard.press("ArrowLeft")            # バーのキー操作：努力値は4ずつ（252 → 248）
+    ref_a = calc_ref([["sv", 1, base[1], 50, 31, e, *JOLLY] for e in range(253)])
+    waste = 248 - ref_a.index(ref_a[248])
+    check("余分な努力値の表示（こうげき 248 振り）", [inv_values(pg)[1], f"こうげき {waste}" in pg.inner_text("#c-waste")], [248, True])
+    pg.keyboard.press("End")
+    check("キー End で最大（252）", inv_values(pg)[1], 252)
+    pg.fill('[data-iv="1"]', "３０")
+    check("全角数字の入力（個体値）", outs(pg)[1], calc_ref([["sv", 1, base[1], 50, 30, 252, *JOLLY]])[0])
+    pg.tap('[data-preset="0"]')
+    tr = pg.locator('[data-sl="3"] .tr').bounding_box()
+    pg.locator('[data-sl="3"]').tap(position={"x": 13 + tr["width"] * 0.75, "y": 20})
+    check("バーの4分の3をタップ（努力値は4ずつ：188）", inv_values(pg)[3], 188)
+    pg.tap('[data-preset="0"]')
     for i in range(6):
-        pg.fill(f'[data-inv="{i}"]', "252")
-    check("合計が上限を超えたら警告", pg.eval_on_selector("#c-total", "e => e.classList.contains('over')"), True)
+        pg.tap(f'[data-max="{i}"]')
+    check("「最大」を全部押しても合計は510まで（H252 A252 B6）", [inv_values(pg), pg.eval_on_selector("#c-total", "e => e.classList.contains('over')")],
+          [[252, 252, 6, 0, 0, 0], False])
+    pg.evaluate("""() => { const o = JSON.parse(localStorage.getItem('pd.calc')); o.ev = [252, 252, 252, 252, 252, 252];
+      localStorage.setItem('pd.calc', JSON.stringify(o)); }""")
+    pg.reload(); pg.wait_for_selector("html[data-pd-ready='1']"); pg.wait_for_selector("#calc .evs")
+    check("合計が上限を超えたら警告（以前の保存データなど）", pg.eval_on_selector("#c-total", "e => e.classList.contains('over')"), True)
+    pg.fill('[data-iv="1"]', "31")
     pg.tap('[data-preset="AS"]')
     pg.tap('[data-ivp="s0"]')
     check("個体値 Sだけ0", outs(pg)[5], calc_ref([["sv", 5, base[5], 50, 0, 252, *JOLLY]])[0])
@@ -268,6 +282,8 @@ def verify_calc(b):
     check("チャンピオンズ ようき AS（H2 A32 S32）の実数値", outs(pg), ref_all("ch", 50, [31] * 6, [2, 32, 0, 0, 0, 32], JOLLY))
     pg.tap('[data-step="1"][data-i="2"]')
     check("合計66のときは＋で増えない", inv_values(pg)[2], 0)
+    pg.tap('[data-max="4"]')
+    check("合計66のときは「最大」でも増えず、合計の行が光る", [inv_values(pg)[4], "flash" in pg.get_attribute("#c-total", "class")], [0, True])
     pg.tap('[data-step="-1"][data-i="0"]')
     pg.tap('[data-step="1"][data-i="2"]')
     check("H を1減らせば B を1増やせる", inv_values(pg), [1, 32, 1, 0, 0, 32])
