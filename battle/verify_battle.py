@@ -135,6 +135,165 @@ def check_cpu_illusion(b):
     ctx.close()
 
 
+READ_YOU = """Arcanine @ Sitrus Berry
+Ability: Justified
+Level: 50
+EVs: 252 HP / 252 Atk / 4 Spe
+Adamant Nature
+- Flare Blitz
+- Extreme Speed
+- Close Combat
+- Wild Charge
+
+Dragonite @ Heavy-Duty Boots
+Ability: Multiscale
+Level: 50
+EVs: 252 HP / 252 Atk / 4 Spe
+Adamant Nature
+- Extreme Speed
+- Dragon Claw
+- Fire Punch
+- Roost
+
+Corviknight @ Leftovers
+Ability: Pressure
+Level: 50
+EVs: 252 HP / 252 Def / 4 SpD
+Impish Nature
+- Brave Bird
+- Iron Head
+- Roost
+- Bulk Up
+
+Tyranitar @ Choice Band
+Ability: Unnerve
+Level: 50
+EVs: 252 HP / 252 Atk / 4 Def
+Adamant Nature
+- Stone Edge
+- Crunch
+- Earthquake
+- Ice Punch
+
+Gengar @ Focus Sash
+Ability: Cursed Body
+Level: 50
+EVs: 252 SpA / 4 SpD / 252 Spe
+Timid Nature
+- Shadow Ball
+- Sludge Bomb
+- Focus Blast
+- Thunderbolt
+
+Pawmot @ Expert Belt
+Ability: Iron Fist
+Level: 50
+EVs: 252 Atk / 4 SpD / 252 Spe
+Jolly Nature
+- Double Shock
+- Close Combat
+- Ice Punch
+- Mach Punch
+"""
+READ_CPU = """Garchomp @ Life Orb
+Ability: Rough Skin
+Level: 50
+EVs: 252 Atk / 4 SpD / 252 Spe
+Jolly Nature
+- Earthquake
+- Dragon Claw
+- Fire Fang
+- Stone Edge
+
+Gholdengo @ Choice Specs
+Ability: Good as Gold
+Level: 50
+EVs: 252 SpA / 4 SpD / 252 Spe
+Modest Nature
+- Make It Rain
+- Shadow Ball
+- Focus Blast
+- Thunderbolt
+
+Amoonguss @ Rocky Helmet
+Ability: Regenerator
+Level: 50
+EVs: 252 HP / 252 Def / 4 SpD
+Bold Nature
+- Spore
+- Giga Drain
+- Sludge Bomb
+- Protect
+
+Rotom-Wash @ Choice Scarf
+Ability: Levitate
+Level: 50
+EVs: 252 SpA / 4 SpD / 252 Spe
+Timid Nature
+- Hydro Pump
+- Volt Switch
+- Trick
+- Will-O-Wisp
+
+Skeledirge @ Sitrus Berry
+Ability: Unaware
+Level: 50
+EVs: 252 HP / 252 Def / 4 SpD
+Bold Nature
+- Torch Song
+- Shadow Ball
+- Slack Off
+- Will-O-Wisp
+
+Kingambit @ Black Glasses
+Ability: Supreme Overlord
+Level: 50
+EVs: 252 HP / 252 Atk / 4 SpD
+Adamant Nature
+- Kowtow Cleave
+- Iron Head
+- Sucker Punch
+- Swords Dance
+"""
+
+
+def check_switch_read(b):
+    print("■ CPU の交代読み（シングル）")
+    ctx = new_context(b, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    pg, errs = open_page(ctx, "?autotest=1")
+    pg.evaluate("([y, o]) => { __bt.useTexts('sv', 'singles', y, o); __bt.startHuman('sv', 'singles'); }", [READ_YOU, READ_CPU])
+    pg.wait_for_function("() => { const a = __bt.reqOf('p1'), b = __bt.reqOf('p2'); return !!(a && b && a.teamPreview && b.teamPreview); }")
+    names = lambda side: pg.evaluate("s => __bt.reqOf(s).side.pokemon.map(p => p.details.split(',')[0])", side)
+    slot = lambda side, n: names(side).index(n) + 1
+
+    def turn(c1, c2, n):                                    # どちらも人が操作する設定なので、両方の選択を送って次のターンを待つ
+        if c1:
+            pg.evaluate("([a, b]) => { __bt.choose('p1', a); __bt.choose('p2', b); }", [c1, c2])
+        pg.wait_for_function("n => { const s = __bt.state(), a = __bt.reqOf('p1'), b = __bt.reqOf('p2');"
+                             " return !!(s && s.turn >= n && a && b && a.active && b.active); }", arg=n)
+
+    order = "".join(str(slot("p1", n)) for n in ("Arcanine", "Dragonite", "Corviknight"))   # あなた：ウインディ（先発）・カイリュー・アーマーガア
+    pg.evaluate("o => { __bt.choose('p1', 'team ' + o); __bt.choose('p2', 'team 123'); }", order)
+    turn(None, None, 1)
+    r1 = pg.evaluate("__bt.cpuRead('p2')")
+    rate = pg.evaluate("__bt.cpuReadRate('p2', 400)")
+    print(f"  ガブリアス vs ウインディ：候補 {r1['cands']} → 交代先の予想 {r1['predicted']}・ふだん {r1['normal']}・読んだとき {r1['read']}・読んだ割合 {rate['reads']:.0%}")
+    check("タイプで不利なウインディの交代先にカイリューを読み、読んだターンは じしん でなく ドラゴンクロー", [r1["predicted"], r1["normal"], r1["read"]],
+          ["カイリュー", "earthquake", "dragonclaw"])
+    check("まだ場に出ていないポケモンは、選出画面の5匹すべてを候補にする（連れてきたかは分からない）", [len(r1["cands"]), all(c.endswith("(未)") for c in r1["cands"])], [5, True])
+    check("交代読みは ときどき（20〜50%）", 0.2 <= rate["reads"] <= 0.5, True)
+    turn(f"switch {slot('p1', 'Corviknight')}", "move 2", 2)
+    check("タイプで不利ではないアーマーガアには読まない", pg.evaluate("__bt.cpuRead('p2')")["predicted"], "")
+    turn(f"switch {slot('p1', 'Arcanine')}", "move 2", 3)
+    check("一度場に出たアーマーガアは、見たままの姿で候補に入る", "アーマーガア" in pg.evaluate("__bt.cpuRead('p2')")["cands"], True)
+    turn(f"switch {slot('p1', 'Dragonite')}", "move 3", 4)
+    turn(f"switch {slot('p1', 'Arcanine')}", "move 3", 5)
+    r5 = pg.evaluate("__bt.cpuRead('p2')")
+    check("選出の3匹が出そろったら、出ていないポケモンは候補から外す", [sorted(r5["cands"]), r5["predicted"]], [sorted(["カイリュー", "アーマーガア"]), "カイリュー"])
+    check("  errors", errs, [])
+    ctx.close()
+
+
 LONG_TEAM = ("Tauros-Paldea-Blaze @ Choice Band\nAbility: Intimidate\n- Raging Bull\n- Close Combat\n- Flare Blitz\n- Wild Charge\n\n"
              "Urshifu-Rapid-Strike @ Choice Scarf\nAbility: Unseen Fist\n- Surging Strikes\n- Close Combat\n- U-turn\n- Aqua Jet\n\n"
              "Ogerpon-Hearthflame @ Hearthflame Mask\nAbility: Mold Breaker\n- Ivy Cudgel\n- Horn Leech\n- Spiky Shield\n- Swords Dance\n\n"
@@ -654,6 +813,7 @@ def main():
 
         check_illusion(b)
         check_cpu_illusion(b)
+        check_switch_read(b)
         check_overflow(b)
         check_move_logic(b)
         check_slider_touch(b)

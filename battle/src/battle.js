@@ -1369,7 +1369,7 @@
     return new Promise(resolve => {
       const f = D.games[g].formats[r], stream = new PSEngine.BattleStream(), ps = PSEngine.getPlayerStreams(stream);
       const sess = { headless: true, f, game: g, cpu: { p1: true, p2: true }, stream, ps, req: { p1: null, p2: null }, done: { p1: false, p2: false },
-        err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0 }, over: false, winner: '', lastWeather: '',
+        err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0, reads: 0 }, over: false, winner: '', lastWeather: '',
         unknown: new Set(), errors: [], ui: null, text: [], teams: { p1: mine, p2: theirs },
         st: newSt() };
       sess.finish = () => {
@@ -1444,7 +1444,7 @@
     if (sel.opp === 'auto') S.autoUsed[key()] = true;   // 次に設定画面を開くと、新しい おまかせ を作る
     const f = fmtInfo(), stream = new PSEngine.BattleStream(), ps = PSEngine.getPlayerStreams(stream);
     const sess = { f, game: S.game, cpu: { p1: AUTOTEST, p2: S.cpu || AUTOTEST }, stream, ps, req: { p1: null, p2: null }, done: { p1: false, p2: false },
-      err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0 }, over: false, winner: '', lastWeather: '', unknown: new Set(), errors: [], ui: null, text: [],
+      err: { p1: '', p2: '' }, hp: new Map(), cpuIn: {}, cpuStats: { moves: 0, switches: 0, status: 0, reads: 0 }, over: false, winner: '', lastWeather: '', unknown: new Set(), errors: [], ui: null, text: [],
       teams: { p1: you, p2: opp }, rec, st: newSt() };
     B = sess;
     V.battle.innerHTML = `<div class="bar"><button type="button" class="back" data-act="quit">${BACK_SVG}やめる</button>` +
@@ -2078,8 +2078,8 @@
     return best;
   }
   // 相性の評価：与えるダメージ − 受けるダメージ ＋ すばやさの有利。交代で出るときは最初の1発を受ける分を引く
-  function matchup(side, mon, entering, usable) {
-    const b = B.stream.battle, foes = b[side].foe.active.filter(p => p && !p.fainted).map(asSeen);
+  function matchup(side, mon, entering, usable, view) {   // view：相手の場にいるのがこのポケモンたちだとして考える（交代読み）
+    const b = B.stream.battle, foes = view || b[side].foe.active.filter(p => p && !p.fainted).map(asSeen);
     if (!foes.length || !mon) return 0;
     const off = bestOffense(mon, foes, usable), thr = Math.min(1.2, Math.max(...foes.map(f => threat(f, mon))));
     const faster = foes.every(f => (effSpeed(mon) > effSpeed(f)) !== !!b.field.pseudoWeather.trickroom);
@@ -2107,7 +2107,7 @@
   const HEALS = new Set(['recover', 'roost', 'slackoff', 'softboiled', 'moonlight', 'morningsun', 'synthesis', 'shoreup', 'milkdrink', 'lifedew',
     'strengthsap', 'healorder', 'junglehealing', 'lunarblessing']);
   const SLEEP = new Set(['spore', 'sleeppowder', 'hypnosis', 'lovelykiss', 'darkvoid', 'sing', 'grasswhistle']);
-  const avgSpeed = (sd, foe) => { const a = sd.active.filter(p => p && !p.fainted).map(p => (foe ? asSeen(p) : p)); return a.length ? a.reduce((x, p) => x + effSpeed(p), 0) / a.length : 0; };
+  const avgSpeed = list => { const a = list.filter(p => p && !p.fainted); return a.length ? a.reduce((x, p) => x + effSpeed(p), 0) / a.length : 0; };
   function monBenefit(p, mode) {            // 対戦中のポケモンが、その天候・フィールドでどれだけ強くなるか
     return benefitOf(p.ability, p.types.map(typeIdx), new Set(p.moveSlots.map(m => m.id)), mode);
   }
@@ -2118,9 +2118,9 @@
     const ben = me.pokemon.filter(p => !p.fainted).reduce((a, p) => a + monBenefit(p, mode), 0);
     return (ben >= 1.5 ? 0.75 : ben >= 0.8 ? 0.5 : ben >= 0.4 ? 0.25 : 0.05) + (cur ? 0.15 : 0);
   }
-  function statusScore(side, slot, mon, move, target) {
+  function statusScore(side, slot, mon, move, target, view) {
     const b = B.stream.battle, id = move.id, dbl = B.f.gameType === 'doubles', me = b[side], foeSide = me.foe;
-    const foes = foeSide.active.filter(p => p && !p.fainted).map(asSeen), hpf = mon.hp / mon.maxhp, tr = !!b.field.pseudoWeather.trickroom;
+    const foes = view || foeSide.active.filter(p => p && !p.fainted).map(asSeen), hpf = mon.hp / mon.maxhp, tr = !!b.field.pseudoWeather.trickroom;
     const thr = Math.max(0, ...foes.map(f => threat(f, mon)));
     const outsped = foes.some(f => (effSpeed(f) > effSpeed(mon)) !== tr);
     const danger = thr >= 1 && outsped;                       // この番に先に倒されそう
@@ -2130,8 +2130,8 @@
     if (SETUPS.has(id)) return danger || hpf < 0.5 || boosts >= 2 ? 0.04 : 0.5 + 0.3 * (1 - Math.min(thr, 1)) + (SPEEDUP.has(id) && outsped ? 0.1 : 0);
     if (HEALS.has(id)) return danger ? 0.1 : (1 - hpf) * 1.2;
     if (id === 'rest') return mon.status && hpf < 0.6 ? 0.7 : hpf < 0.35 && !danger ? 0.5 : 0.02;
-    if (id === 'trickroom') return tr ? -1 : avgSpeed(me) < avgSpeed(foeSide, true) ? 0.9 : 0.05;
-    if (id === 'tailwind') return me.sideConditions.tailwind ? 0 : (avgSpeed(me) < avgSpeed(foeSide, true) ? 0.8 : 0.35) * (dbl ? 1 : 0.7);
+    if (id === 'trickroom') return tr ? -1 : avgSpeed(me.active) < avgSpeed(foes) ? 0.9 : 0.05;
+    if (id === 'tailwind') return me.sideConditions.tailwind ? 0 : (avgSpeed(me.active) < avgSpeed(foes) ? 0.8 : 0.35) * (dbl ? 1 : 0.7);
     if (id === 'reflect' || id === 'lightscreen') return me.sideConditions[id] ? 0 : 0.5;
     if (id === 'auroraveil') return me.sideConditions.auroraveil || !/snow|hail/.test(b.field.weather) ? 0 : 0.7;
     if (MODE_BY_MOVE[id]) return modeMoveScore(side, MODE_BY_MOVE[id]);
@@ -2162,7 +2162,7 @@
     if (id === 'haze' || id === 'clearsmog') return foes.reduce((a, f) => a + Object.values(f.boosts).reduce((x, v) => x + Math.max(0, v), 0), 0) >= 2 ? 0.75 : 0.03;
     if (id === 'encore') return tgt.lastMove && tgt.lastMove.category === 'Status' ? 0.6 : 0.08;
     if (id === 'taunt') return 0.2;
-    if (id === 'partingshot' || id === 'teleport') return matchup(side, mon, false) < -0.2 ? 0.5 : 0.12;
+    if (id === 'partingshot' || id === 'teleport') return matchup(side, mon, false, null, view) < -0.2 ? 0.5 : 0.12;
     if (id === 'substitute') return hpf > 0.6 && !danger ? 0.3 : 0.02;
     if (id === 'destinybond') return danger ? 0.6 : 0.02;
     if (id === 'wideguard' || id === 'quickguard') return dbl ? 0.15 : 0;
@@ -2175,10 +2175,10 @@
     for (const k in bo) if (bo[k] < 0) d[k] = bo[k];
     return Object.keys(d).length ? d : null;
   }
-  function scoreMove(side, slot, mon, move, t) {
-    const b = B.stream.battle, foes = b[side].foe.active.map(asSeen), allies = b[side].active, dbl = B.f.gameType === 'doubles';
+  function scoreMove(side, slot, mon, move, t, view) {
+    const b = B.stream.battle, foes = view || b[side].foe.active.map(asSeen), allies = b[side].active, dbl = B.f.gameType === 'doubles';
     const target = t == null ? foes.find(p => p && !p.fainted) : t > 0 ? foes[t - 1] : allies[-t - 1];
-    if (move.category === 'Status') return statusScore(side, slot, mon, move, target);
+    if (move.category === 'Status') return statusScore(side, slot, mon, move, target, view);
     if (t != null && t < 0) return -1;
     let s = 0;
     if (dbl && (move.target === 'allAdjacentFoes' || move.target === 'allAdjacent')) {
@@ -2199,6 +2199,61 @@
     if (move.id === 'fakeout') { if (mon.activeMoveActions > 0) return 0; s += 0.35; }
     if (move.priority > 0 && s >= 1) s += 0.3;
     return s;
+  }
+  // ---- 交代読み（シングル） --------------------------------------------------
+  // 相手の場のポケモンがタイプで不利なら、ときどき「有利なポケモンに交代してくる」と読む。
+  // 読んだターンは、技を「交代先に当たる場合」8割・「居座られた場合」2割で評価し直して選ぶ
+  const READ_RATE = 0.35, READ_W = 0.8;
+  function stabEff(atk, def) {              // atk のタイプ一致技が def にどれだけ通るか（2倍で頭打ち。無効・吸収する特性は0）
+    const dex = B.stream.battle.dex, tera = p => (p.terastallized && p.terastallized !== 'Stellar' ? p.terastallized : '');
+    const dt = tera(def) ? [tera(def)] : def.types, at = [...new Set(atk.types.concat(tera(atk) ? [tera(atk)] : []))];
+    return Math.max(0, ...at.map(t => (!dex.getImmunity(t, dt) || (ABSORB[t] || []).includes(def.ability) ? 0 : Math.min(2, Math.pow(2, dex.getEffectiveness(t, dt))))));
+  }
+  function ghostOf(set, sd) {               // まだ場に出ていないポケモン：型どおり・HP満タンの姿で考える
+    const b = B.stream.battle, sp = b.dex.species.get(set.species), st = b.spreadModify(sp.baseStats, set);
+    return { name: set.name || sp.name, species: sp, types: sp.types.slice(), ability: toID(set.ability), storedStats: st, maxhp: st.hp, hp: st.hp,
+      boosts: { atk: 0, def: 0, spa: 0, spd: 0, spe: 0, accuracy: 0, evasion: 0 }, status: '', volatiles: {}, terastallized: '', fainted: false,
+      side: sd, lastMove: null, moveSlots: [], illusion: null, ghost: true };
+  }
+  // 相手の交代先の候補。見えている情報だけを使う：一度場に出たポケモンは、いまのHP・状態異常のまま。
+  // まだ出ていないポケモンは、選出画面で見えた6匹から考える（どれを連れてきたかは分からない）。
+  // 選出した数だけ場に出たあとは、まだ出ていないポケモンは連れてきていないと分かるので外す
+  function foeBench(side) {
+    const fs = B.stream.battle[side].foe, real = new Map(fs.pokemon.map(p => [p.set, p]));
+    const shown = fs.pokemon.filter(p => p.previouslySwitchedIn > 0).length;
+    const allShown = shown >= Math.min(B.f.pick || fs.team.length, fs.team.length);
+    const out = [];
+    for (const set of fs.team) {
+      const p = real.get(set);
+      if (p && (p.isActive || p.fainted)) continue;
+      if (p && p.previouslySwitchedIn > 0) out.push(asSeen(p));
+      else if (!allShown) out.push(ghostOf(set, fs));
+    }
+    return out;
+  }
+  // 相手が交代してきそうなら、その交代先（予想）を返す。opts は こちらが選べる技（move を持つ）
+  function readSwitch(side, mon, opts) {
+    const b = B.stream.battle, fs = b[side].foe, foe = fs.active[0];
+    if (B.f.gameType === 'doubles' || !foe || foe.fainted || foe.trapped) return null;
+    if (!fs.pokemon.some(p => !p.fainted && !p.isActive)) return null;              // 控えが残っていない
+    if (foe.hp / foe.maxhp < 0.35) return null;                                       // 残りわずかなら、引かずにそのまま倒されることが多い
+    const F = asSeen(foe), me = asSeen(mon);                                          // 相手から見えている こちらの姿で考える
+    if (stabEff(me, F) - stabEff(F, me) < 1) return null;                             // タイプで不利と言えるほどではない
+    let fear = null, fearF = 0;                                                       // 相手が警戒するのは、こちらのいちばん強い攻撃技
+    for (const o of opts) {
+      if (o.move.category === 'Status') continue;
+      const f = Math.min(1, dmgFrac(mon, o.move, F, false));
+      if (f > fearF) { fearF = f; fear = o.move; }
+    }
+    if (!fear || fearF < 0.3) return null;
+    let X = null, xv = Infinity;                                                      // 交代先：その技を半分以下に抑えて、こちらを攻め返せるポケモン
+    for (const c of foeBench(side)) {
+      const taken = Math.min(1, dmgFrac(mon, fear, c, false));
+      if (taken > fearF * 0.5) continue;
+      const v = taken - 0.5 * Math.min(1, threat(c, mon));
+      if (v < xv) { xv = v; X = c; }
+    }
+    return X;
   }
   function cpuTargets(side, slot, tgt) {
     if (B.f.gameType !== 'doubles') return [null];
@@ -2293,7 +2348,10 @@
         act.moves.forEach((m, j) => {
           if (m.disabled) return;
           const move = B.stream.battle.dex.moves.get(m.id);
-          for (const t of cpuTargets(side, i, m.target)) opts.push({ j: j + 1, t, s: scoreMove(side, i, mon, move, t) * (0.85 + Math.random() * 0.3) });
+          for (const t of cpuTargets(side, i, m.target)) {
+            const raw = scoreMove(side, i, mon, move, t), jit = 0.85 + Math.random() * 0.3;
+            opts.push({ j: j + 1, t, move, raw, jit, s: raw * jit });
+          }
         });
         opts.sort((x, y) => y.s - x.s);
         // いまのポケモンより明らかに有利な控えがいれば交代する。前のターンに交代で出たばかりのポケモンは、すぐには戻さない
@@ -2308,6 +2366,16 @@
             B.cpuStats.switches++;
             parts.push('switch ' + alt.k);
             return;
+          }
+        }
+        // 交代読み：相手がタイプで不利なら、ときどき交代してくると読んで、交代先にも効く技を選ぶ
+        if (opts.length && Math.random() < READ_RATE) {
+          const X = readSwitch(side, mon, opts);
+          if (X) {
+            const was = opts[0];
+            for (const o of opts) o.s = ((1 - READ_W) * o.raw + READ_W * scoreMove(side, i, mon, o.move, o.t, [X])) * o.jit;
+            opts.sort((x, y) => y.s - x.s);
+            if (opts[0] !== was) B.cpuStats.reads++;
           }
         }
         B.cpuStats.moves++;
@@ -2558,6 +2626,25 @@
             const v = asSeen(foes[0]);
             return { best: scores[0].id, seen: { name: v.name, types: v.types } };
           } finally { foes.forEach((p, k) => { if (p) p.illusion = saved[k]; }); bench.forEach(p => { p.fainted = false; }); }
+        },
+        reqOf: side => B.req[side],      // 検証用：いまの要求
+        choose(side, c) { submit(side, c); },   // 検証用：その側の選択を送る
+        cpuRead(side) {                   // 交代読み：予想した交代先、候補、ふだんの最善手と読んだときの最善手（揺らぎなし）
+          const b = B.stream.battle, mon = b[side].active[0], foe = b[side].foe.active[0];
+          const opts = B.req[side].active[0].moves.filter(m => !m.disabled).map(m => { const move = b.dex.moves.get(m.id); return { id: m.id, move, raw: scoreMove(side, 0, mon, move, null) }; });
+          const X = readSwitch(side, mon, opts), top = a => a.slice().sort((x, y) => y.v - x.v)[0].id;
+          const F = asSeen(foe), me = asSeen(mon);
+          return { me: mon.name, foe: F.name, adv: stabEff(me, F) - stabEff(F, me), cands: foeBench(side).map(c => c.name + (c.ghost ? '(未)' : '')),
+            predicted: X ? X.name : '', normal: top(opts.map(o => ({ id: o.id, v: o.raw }))),
+            read: X ? top(opts.map(o => ({ id: o.id, v: (1 - READ_W) * o.raw + READ_W * scoreMove(side, 0, mon, o.move, null, [X]) }))) : '' };
+        },
+        cpuReadRate(side, n) {            // n 回考えさせた選択の内訳と、交代読みで技を変えた割合
+          const st = Object.assign({}, B.cpuStats), out = {};
+          B.cpuStats.reads = 0;
+          try {
+            for (let i = 0; i < n; i++) { const c = cpuChoice(side, B.req[side]); out[c] = (out[c] || 0) + 1; }
+            return { reads: B.cpuStats.reads / n, choices: out };
+          } finally { B.cpuStats = st; B.cpuIn = {}; }
         },
         autoBoth() {
           const s = selOf(S.game, S.rule);
