@@ -1,6 +1,6 @@
 {
-  "pokeapi": "2026-11-15T20:46:01Z",
-  "showdown": "41ba4797f8bffa503111fb42dc1d66d8cdb8405c",
+  "pokeapi": "2026-11-20T20:17:44Z",
+  "showdown": "e7f50cd7bcb36348c631534a97ae8323b8189541",
   "formats": {
     "ch": {
       "singles": "gen9championsbssregmc",
@@ -12,8 +12,8 @@
     }
   },
   "counts": {
-    "pokemon": 1262,
-    "moves": 919,
+    "pokemon": 1256,
+    "moves": 920,
     "abilities": 314
   }
 }
